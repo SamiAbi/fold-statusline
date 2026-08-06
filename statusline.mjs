@@ -20,11 +20,16 @@ const fg = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m`;
 };
+// Chrome colors are tuned against Fold's #16161e background; on other
+// terminals' backgrounds they can vanish entirely. Fold sessions export
+// FOLD=1 — inside, use the exact theme; elsewhere, a brighter border/track
+// that stays visible on any dark background.
+const inFold = process.env.FOLD === "1";
 const C = {
   text: fg("#d5d5e0"), dim: fg("#71718a"), accent: fg("#7aa2f7"),
   ok: fg("#9ece6a"), warn: fg("#e0af68"), danger: fg("#f7768e"),
   cyan: fg("#7dcfff"), purple: fg("#bb9af7"), orange: fg("#ff9e64"), teal: fg("#2ac3de"),
-  track: fg("#34344a"), border: fg("#2c2c3a"),
+  track: fg(inFold ? "#34344a" : "#4d4d63"), border: fg(inFold ? "#2c2c3a" : "#565672"),
 };
 const t = (s) => C.text + s + RS;
 const d = (s) => C.dim + s + RS;
