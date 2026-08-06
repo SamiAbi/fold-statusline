@@ -1,0 +1,31 @@
+{
+  "name": "fold-statusline",
+  "version": "0.1.0",
+  "description": "The Fold deck line — a boxed, icon-rich status line for Claude Code that folds to fit your terminal",
+  "type": "module",
+  "bin": {
+    "fold-statusline": "bin/cli.mjs"
+  },
+  "files": [
+    "bin/cli.mjs",
+    "statusline.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SamiAbi/fold-statusline.git"
+  },
+  "keywords": [
+    "claude-code",
+    "statusline",
+    "terminal",
+    "nerd-font",
+    "fold"
+  ],
+  "author": "Sami Abishai",
+  "license": "MIT"
+}
