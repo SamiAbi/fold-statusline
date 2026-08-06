@@ -40,6 +40,7 @@ fold-statusline uninstall   # put everything back the way it was
 |---|---|
 | <img src="docs/bits/user.svg" height="24"> | The Claude **account** signed in (email local part) |
 | <img src="docs/bits/model.svg" height="24"> | **Model** and **reasoning effort** — the bolt is dim / green / amber / red for low / medium / high / max, and `FAST` appears bold red in fast mode |
+| <img src="docs/bits/style.svg" height="24"> | The active **output style** (`/output-style`) — how Claude writes; `default` renders dim so the usual state stays quiet |
 | <img src="docs/bits/context.svg" height="24"> | **Context window**: 10-cell bar + percent used, then **time-to-empty** predicted from your live burn rate (token samples across renders). Before enough samples exist it shows tokens left (`165k`) |
 | <img src="docs/bits/context-hot.svg" height="24"> | …and at ≥ 80 % the whole section turns red, with a fire and the shrinking estimate |
 | <img src="docs/bits/five.svg" height="24"> | The rolling **5-hour rate-limit window**: percent used and — instead of a countdown you'd have to do math on — the **wall-clock time it resets** |

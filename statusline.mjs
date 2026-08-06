@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Claude Code status line — "the deck line" (Fold design, approved 2026-08-06).
 // One line inside a rounded box: title = place ( fold · main ✱3), row =
-// icon-led groups separated by dim │ — user · model+effort · context (bar +
-// % + time-left) · 5h · week (wall-clock resets) · mcp · session time.
+// icon-led groups separated by dim │ — user · model+effort · output style ·
+// context (bar + % + time-left) · 5h · week (wall-clock resets) · mcp ·
+// session time.
 // Enterprise seats: the 5h slot collapses and cost takes its place.
 // Always renders the full line at its natural width (no shrinking).
 // Part of fold-statusline — install with `npx github:SamiAbi/fold-statusline`
@@ -50,6 +51,7 @@ const I = {
   clock: "\uf017",  // reset time
   puzzle: "\uf12e", // mcp
   heart: "\uf21e",  // heartbeat = session
+  brush: "\uf1fc",  // paint-brush = output style
   fire: "\uf06d",   // context nearly spent
   dollar: "\uf155", // enterprise cost
 };
@@ -249,6 +251,12 @@ function main() {
       if (eff) g += ` ${ec}${I.bolt} ${eff}${RS}`;
       if (data?.fast_mode) g += ` ${b(C.danger, "FAST")}`;
       id.push(g);
+    }
+
+    //  output style — how Claude writes; the default stays quiet (dim)
+    const style = data?.output_style?.name;
+    if (style) {
+      id.push(`${C.orange}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`);
     }
 
     //  context: bar + bold % + ~time-left (falls back to tokens left)
