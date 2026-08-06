@@ -16,10 +16,13 @@ npx github:SamiAbi/fold-statusline
 
 or clone and run `node bin/cli.mjs install`. The CLI copies `statusline.mjs` to `~/.claude/`, enables it in `~/.claude/settings.json`, and backs up whatever status line you had before — `fold-statusline uninstall` restores it exactly.
 
-**Requirements:** Claude Code · Node ≥ 18 · a [Nerd Font](https://www.nerdfonts.com/) as your terminal font — [Maple Mono NF](https://github.com/subframe7536/maple-font) recommended (`brew install --cask font-maple-mono-nf`) · a truecolor terminal.
+**The icons need a Nerd Font.** If none is found, `install` gets [Maple Mono NF](https://github.com/subframe7536/maple-font) for you (Homebrew when available, direct download to your user fonts otherwise) and then tells you exactly where to select it in *your* terminal (Terminal.app, iTerm2, VS Code, WezTerm — and for Ghostty it writes the `font-family` line into the config itself). Selecting the font is the one step no CLI can do for every terminal — it's a per-app setting.
+
+**Requirements:** Claude Code · Node ≥ 18 · a truecolor terminal.
 
 ```sh
-fold-statusline status      # is it installed + enabled?
+fold-statusline status      # is it installed + enabled? font present?
+fold-statusline font        # just the font install + enable instructions
 fold-statusline uninstall   # put everything back the way it was
 ```
 

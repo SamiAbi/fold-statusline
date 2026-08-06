@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 // fold-statusline CLI — install/uninstall the Fold deck line for Claude Code.
 //   fold-statusline install     copy the status line to ~/.claude and enable it
+//                               (installs Maple Mono NF too when no Nerd Font is found)
+//   fold-statusline font        install the font + show how to enable it in your terminal
 //   fold-statusline uninstall   disable it and restore whatever was there before
 //   fold-statusline status      show whether it is installed and enabled
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, readdirSync, unlinkSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, writeFileSync, copyFileSync, existsSync, readdirSync, unlinkSync, mkdirSync, appendFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "statusline.mjs");
 const CLAUDE_DIR = join(homedir(), ".claude");
@@ -28,14 +31,82 @@ function writeSettings(s) {
 function stamp() {
   return new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
 }
+function fontDirs() {
+  if (process.platform === "darwin") return [join(homedir(), "Library", "Fonts"), "/Library/Fonts"];
+  if (process.platform === "linux") return [join(homedir(), ".local", "share", "fonts"), "/usr/share/fonts"];
+  return [];
+}
 function fontInstalled() {
-  if (process.platform !== "darwin") return null; // unknown elsewhere
-  for (const dir of [join(homedir(), "Library", "Fonts"), "/Library/Fonts"]) {
+  const dirs = fontDirs();
+  if (dirs.length === 0) return null; // unknown platform
+  for (const dir of dirs) {
     try {
       if (readdirSync(dir).some((f) => /nerd|maple.*nf|nf-|-nf/i.test(f))) return true;
     } catch { /* missing dir */ }
   }
   return false;
+}
+function hasCmd(cmd) {
+  try { execSync(`command -v ${cmd}`, { stdio: "ignore", shell: "/bin/sh" }); return true; }
+  catch { return false; }
+}
+
+const FONT_ZIP = "https://github.com/subframe7536/maple-font/releases/latest/download/MapleMono-NF.zip";
+
+// Install Maple Mono NF: Homebrew when available, otherwise direct download
+// into the user font dir (no admin needed). Returns true when a Nerd Font is
+// present afterwards.
+function installFont() {
+  if (fontInstalled()) { ok(`Nerd Font already installed`); return true; }
+  if (process.platform === "darwin" && hasCmd("brew")) {
+    info(`installing Maple Mono NF (brew cask)…`);
+    try {
+      execSync("brew install --cask font-maple-mono-nf", { stdio: "inherit" });
+      ok(`Maple Mono NF installed`);
+      return true;
+    } catch { warn(`brew install failed — falling back to direct download`); }
+  }
+  const dir = fontDirs()[0];
+  if (!dir) { warn(`automatic font install isn't supported on this OS — get one at nerdfonts.com`); return false; }
+  try {
+    info(`downloading Maple Mono NF…`);
+    const zip = join(tmpdir(), "MapleMono-NF.zip");
+    execSync(`curl -fsSL -o "${zip}" "${FONT_ZIP}"`, { stdio: "inherit" });
+    mkdirSync(dir, { recursive: true });
+    execSync(`unzip -o -q "${zip}" "*.ttf" -d "${dir}"`, { stdio: "inherit" });
+    if (process.platform === "linux" && hasCmd("fc-cache")) execSync("fc-cache -f", { stdio: "ignore" });
+    ok(`Maple Mono NF installed → ${dir.replace(homedir(), "~")}`);
+    return true;
+  } catch {
+    warn(`font download failed — install manually: https://github.com/subframe7536/maple-font/releases`);
+    return false;
+  }
+}
+
+// The font must also be SELECTED in the terminal — per-app config we mostly
+// can't write for the user. Ghostty's plain config file is the exception;
+// for everything else, print the exact place to change it.
+function fontEnableHint() {
+  const tp = process.env.TERM_PROGRAM ?? "";
+  if (tp === "ghostty" || process.env.GHOSTTY_RESOURCES_DIR) {
+    const cfg = join(homedir(), ".config", "ghostty", "config");
+    try {
+      const cur = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+      if (/^\s*font-family\s*=/m.test(cur)) {
+        info(`Ghostty: set  font-family = Maple Mono NF  in ~/.config/ghostty/config`);
+      } else {
+        mkdirSync(dirname(cfg), { recursive: true });
+        appendFileSync(cfg, `${cur.endsWith("\n") || cur === "" ? "" : "\n"}font-family = Maple Mono NF\n`);
+        ok(`Ghostty config updated (font-family = Maple Mono NF) — reload with cmd+shift+,`);
+      }
+    } catch { info(`Ghostty: add  font-family = Maple Mono NF  to ~/.config/ghostty/config`); }
+    return;
+  }
+  if (tp === "Apple_Terminal") info(`enable it: Terminal ▸ Settings… ▸ Profiles ▸ Text ▸ Font → "Maple Mono NF"`);
+  else if (tp === "iTerm.app") info(`enable it: iTerm2 ▸ Settings ▸ Profiles ▸ Text ▸ Font → "Maple Mono NF"`);
+  else if (tp === "vscode") info(`enable it: VS Code settings → "terminal.integrated.fontFamily": "Maple Mono NF"`);
+  else if (tp === "WezTerm") info(`enable it: wezterm.lua → font = wezterm.font("Maple Mono NF")`);
+  else info(`enable it: set your terminal's font to "Maple Mono NF"`);
 }
 
 function install() {
@@ -60,8 +131,8 @@ function install() {
   ok(`~/.claude/settings.json: statusLine enabled`);
 
   if (fontInstalled() === false) {
-    warn(`no Nerd Font detected — icons will show as boxes.`);
-    info(`fix: brew install --cask font-maple-mono-nf  (then set it as your terminal font)`);
+    warn(`no Nerd Font detected — icons would show as boxes. Installing one:`);
+    if (installFont()) fontEnableHint();
   }
   info(`done — the deck line appears in Claude Code within ~30s (or next message).`);
 }
@@ -107,7 +178,8 @@ const cmd = process.argv[2] || "install";
 if (cmd === "install") install();
 else if (cmd === "uninstall") uninstall();
 else if (cmd === "status") status();
+else if (cmd === "font") { installFont(); fontEnableHint(); }
 else {
   console.log(`fold-statusline — the Fold deck line for Claude Code
-usage: fold-statusline [install|uninstall|status]   (default: install)`);
+usage: fold-statusline [install|font|uninstall|status]   (default: install)`);
 }
