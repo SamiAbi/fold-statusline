@@ -136,6 +136,36 @@ test("zero left hides the section", () => {
   assert.doesNotMatch(out, /left/);
 });
 
+test("non-positive remaining field is authoritative — no fall-through to arithmetic", () => {
+  // remaining_dollars is negative, but limit-used arithmetic would say $96.15
+  // left. The explicit field must win and hide the section — never fall
+  // through to arithmetic just because the field looks unusable.
+  const out = render({
+    claudeJson: cjWith({
+      remaining_dollars: -5,
+      monthly_limit: 100, used_credits: 3850, utilization: 39, decimal_places: 2,
+    }),
+    payload: PAYLOAD,
+  });
+  assert.doesNotMatch(out, /left/);
+});
+
+test("sub-cent balance rounds to $0.00 and hides instead of showing '$0.00 left'", () => {
+  const out = render({
+    claudeJson: cjWith({ remaining_dollars: 0.004, decimal_places: 2 }),
+    payload: PAYLOAD,
+  });
+  assert.doesNotMatch(out, /left/);
+});
+
+test("claude.json containing the literal 'null' neither crashes nor renders credits", () => {
+  // The render() helper JSON.stringifies whatever `claudeJson` is given, and
+  // a default parameter only replaces `undefined`, so an explicit `null`
+  // passes through and the fixture file's content is the literal text "null".
+  const out = render({ claudeJson: null, payload: PAYLOAD });
+  assert.doesNotMatch(out, /left/);
+});
+
 test("unlimited limit with no remaining field hides the section", () => {
   const out = render({
     claudeJson: cjWith({

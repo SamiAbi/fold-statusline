@@ -84,7 +84,10 @@ function readStdin() {
 // ~/.claude.json, parsed once and shared (account identity + usage cache).
 const CLAUDE_JSON = process.env.STATUSLINE_CLAUDE_JSON || join(homedir(), ".claude.json"); // test override
 function claudeJson() {
-  try { return JSON.parse(readFileSync(CLAUDE_JSON, "utf8")); } catch { return {}; }
+  try {
+    const v = JSON.parse(readFileSync(CLAUDE_JSON, "utf8"));
+    return v && typeof v === "object" ? v : {};
+  } catch { return {}; }
 }
 
 function oauthAccount(cj) {
@@ -122,7 +125,7 @@ function creditsInfo(cj) {
         }
       }
     }
-    if (!Number.isFinite(left) || left <= 0) return null;
+    if (!Number.isFinite(left) || left < 0.005) return null;
     const pct = Number.isFinite(xu.utilization) && Number.isFinite(xu.monthly_limit)
       ? xu.utilization : null;
     const age = Number.isFinite(cu.fetchedAtMs) ? Date.now() - cu.fetchedAtMs : null;
