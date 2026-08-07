@@ -44,6 +44,7 @@ fold-statusline uninstall   # put everything back the way it was
 | <img src="docs/bits/context.svg" height="24"> | **Context window**: 10-cell bar + percent used, then **time-to-empty** predicted from your live burn rate (token samples across renders). Before enough samples exist it shows tokens left (`165k`) |
 | <img src="docs/bits/context-hot.svg" height="24"> | …and at ≥ 80 % the whole section turns red, with a fire and the shrinking estimate |
 | <img src="docs/bits/five.svg" height="24"> | The rolling **5-hour rate-limit window**: percent used and — instead of a countdown you'd have to do math on — the **wall-clock time it resets** |
+| <img src="docs/bits/credits.svg" height="24"> | **Extra-usage credits**: dollars left on your credit balance. Appears only when there is money to show — no credits, $0, or unknown means the section vanishes. A dim age tag like `(16d)` marks a reading Claude Code hasn't refreshed lately |
 | <img src="docs/bits/week.svg" height="24"> | The **7-day window**, same treatment; beyond 24 h the reset shows as a weekday |
 | <img src="docs/bits/mcp.svg" height="24"> | **MCP servers** connected (cached, refreshed every 2 min in the background) |
 | <img src="docs/bits/mcp-down.svg" height="24"> | …and if a server that was up goes down, the count turns red |

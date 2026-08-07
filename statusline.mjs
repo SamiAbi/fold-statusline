@@ -2,8 +2,8 @@
 // Claude Code status line — "the deck line" (Fold design, approved 2026-08-06).
 // One line inside a rounded box: title = place ( fold · main ✱3), row =
 // icon-led groups separated by dim │ — user · model+effort · output style ·
-// context (bar + % + time-left) · 5h · week (wall-clock resets) · mcp ·
-// session time.
+// context (bar + % + time-left) · 5h · credits ($ left, when any) · week
+// (wall-clock resets) · mcp · session time.
 // Enterprise seats: the 5h slot collapses and cost takes its place.
 // Always renders the full line at its natural width (no shrinking).
 // Part of fold-statusline — install with `npx github:SamiAbi/fold-statusline`
