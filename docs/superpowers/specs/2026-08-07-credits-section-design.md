@@ -49,7 +49,9 @@ degrade to "section hidden", never to a crash.
 The section shows one thing only: money left, as `$61.50 left`.
 
 1. A real remaining/balance dollar field is non-null and > 0
-   → `$61.50 left`
+   → `$61.50 left`. When present, this field is authoritative: if it is
+   ≤ 0 the section hides — no fall-through to the arithmetic in (2), which
+   could show money that is not there (user ruling, 2026-08-07).
 2. `monthly_limit` set and `monthly_limit − used` > 0
    → `$61.50 left`
 3. Anything else (unlimited limit with no remaining field, no data, $0,
