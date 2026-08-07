@@ -54,6 +54,7 @@ const I = {
   brush: "\uf1fc",  // paint-brush = output style
   fire: "\uf06d",   // context nearly spent
   dollar: "\uf155", // enterprise cost
+  card: "\uf09d",   // credit-card = extra-usage credits
 };
 
 // ---- visible width (ANSI stripped; NF PUA glyphs render 1 cell here) ----
@@ -94,6 +95,39 @@ function isEnterprisePlan(oa) {
   if (process.env.STATUSLINE_ENTERPRISE === "1") return true; // test override
   return /enterprise/i.test(oa.organizationType || "") ||
          /enterprise|usage_based/i.test(oa.seatTier || "");
+}
+
+// Extra-usage credits: money left, from the UNDOCUMENTED cachedUsageUtilization
+// block of ~/.claude.json (no official statusline field carries a balance).
+// Any surprise in shape or sign means null — section hidden, never a crash.
+// used_credits units are unverified (minor units vs dollars): when the percent
+// derived from it disagrees with the reported utilization, trust the percent.
+function creditsInfo(cj) {
+  try {
+    const cu = cj.cachedUsageUtilization;
+    const xu = cu?.utilization?.extra_usage;
+    if (!xu || typeof xu !== "object") return null;
+    if (xu.disabled_reason === "out_of_credits" || xu.spend_limit_reached === true) return null;
+    const dp = Number.isFinite(xu.decimal_places) ? xu.decimal_places : 2;
+    let left = null;
+    if (Number.isFinite(xu.remaining_dollars)) {
+      left = xu.remaining_dollars;
+    } else if (Number.isFinite(xu.monthly_limit) && Number.isFinite(xu.used_credits)) {
+      const used = xu.used_credits / 10 ** dp;
+      left = xu.monthly_limit - used;
+      if (Number.isFinite(xu.utilization) && xu.monthly_limit > 0) {
+        const derived = (used / xu.monthly_limit) * 100;
+        if (Math.abs(derived - xu.utilization) > 2) {
+          left = xu.monthly_limit * (1 - xu.utilization / 100);
+        }
+      }
+    }
+    if (!Number.isFinite(left) || left <= 0) return null;
+    const pct = Number.isFinite(xu.utilization) && Number.isFinite(xu.monthly_limit)
+      ? xu.utilization : null;
+    const age = Number.isFinite(cu.fetchedAtMs) ? Date.now() - cu.fetchedAtMs : null;
+    return { left, pct, age };
+  } catch { return null; }
 }
 
 // Local part of the account email (the deck line shows who, not the domain).
@@ -237,6 +271,7 @@ function main() {
   const rl = data?.rate_limits || {};
   const cost = data?.cost?.total_cost_usd;
   const mcp = mcpCounts();
+  const credits = enterprise ? null : creditsInfo(cj);
 
   // Exactly two cases: the full approved deck line on one row, or — only when
   // that row would be cut off — the SAME content folded onto two rows: row 1 =
@@ -293,6 +328,12 @@ function main() {
       } else {
         meters.push(`${C.purple}${I.hour}${RS}  ${d("—")}`);
       }
+    }
+
+    //  credits — extra-usage money left; absent unless there is a positive number
+    if (credits) {
+      const col = credits.pct == null ? C.text : level(credits.pct);
+      meters.push(`${C.ok}${I.card}${RS}  ${b(col, "$" + credits.left.toFixed(2))} ${d("left")}`);
     }
 
     //  week — % +  wall-clock reset (all seats, when present)
