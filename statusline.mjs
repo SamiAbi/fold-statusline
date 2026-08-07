@@ -80,10 +80,14 @@ function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
 }
 
-function oauthAccount() {
-  try {
-    return JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8")).oauthAccount || {};
-  } catch { return {}; }
+// ~/.claude.json, parsed once and shared (account identity + usage cache).
+const CLAUDE_JSON = process.env.STATUSLINE_CLAUDE_JSON || join(homedir(), ".claude.json"); // test override
+function claudeJson() {
+  try { return JSON.parse(readFileSync(CLAUDE_JSON, "utf8")); } catch { return {}; }
+}
+
+function oauthAccount(cj) {
+  return cj.oauthAccount || {};
 }
 
 function isEnterprisePlan(oa) {
@@ -148,7 +152,8 @@ function bar(pct, width = 10) {
 const effortColor = { low: C.dim, medium: C.ok, high: C.warn, xhigh: C.danger, max: C.danger };
 
 // ---- MCP cache (detached refresh; rendered as a count) ----
-const MCP_CACHE = join(homedir(), ".claude", "mcp-status.cache");
+const MCP_CACHE = process.env.STATUSLINE_MCP_CACHE || // test override
+  join(homedir(), ".claude", "mcp-status.cache");
 const MCP_TTL_MS = 120000;
 function mcpRefreshIfStale() {
   let age = Infinity;
@@ -185,7 +190,8 @@ function main() {
   // Usage cache: last-known values per session + burn-rate samples.
   // rate_limits are account-global (reused across sessions); context/cost are
   // per-session. samples[] = {t, used} context-token samples for burn rate.
-  const USAGE_CACHE = join(homedir(), ".claude", "statusline-usage.cache");
+  const USAGE_CACHE = process.env.STATUSLINE_USAGE_CACHE || // test override
+    join(homedir(), ".claude", "statusline-usage.cache");
   let cache = {};
   try { cache = JSON.parse(readFileSync(USAGE_CACHE, "utf8")); } catch { /* none */ }
   const sameSession = cache.session_id && cache.session_id === data.session_id;
@@ -223,7 +229,8 @@ function main() {
   }
   if (cacheDirty) { try { writeFileSync(USAGE_CACHE, JSON.stringify(cache)); } catch { /* ignore */ } }
 
-  const oa = oauthAccount();
+  const cj = claudeJson();
+  const oa = oauthAccount(cj);
   const enterprise = isEnterprisePlan(oa);
   const cwd = data?.workspace?.current_dir || data?.cwd;
   const git = gitInfo(cwd);

@@ -6,6 +6,9 @@
   "bin": {
     "fold-statusline": "bin/cli.mjs"
   },
+  "scripts": {
+    "test": "node --test test/*.mjs"
+  },
   "files": [
     "bin/cli.mjs",
     "statusline.mjs",
