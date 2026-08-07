@@ -169,6 +169,15 @@ function fmtDur(mins) {
   return `~${Math.round(mins / 60)}h`;
 }
 
+// cache age → compact largest-unit form: 45m / 3h / 16d
+function fmtAge(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
 // Meter hue by threshold: quiet green under 50, amber to 80, red above.
 function level(pct) {
   if (pct >= 80) return C.danger;
@@ -330,10 +339,13 @@ function main() {
       }
     }
 
-    //  credits — extra-usage money left; absent unless there is a positive number
+    //  credits — extra-usage money left; absent unless there is a positive number.
+    // The balance is a cache Claude Code refreshes only occasionally — flag old readings.
     if (credits) {
       const col = credits.pct == null ? C.text : level(credits.pct);
-      meters.push(`${C.ok}${I.card}${RS}  ${b(col, "$" + credits.left.toFixed(2))} ${d("left")}`);
+      let g = `${C.ok}${I.card}${RS}  ${b(col, "$" + credits.left.toFixed(2))} ${d("left")}`;
+      if (credits.age != null && credits.age > 3600 * 1000) g += ` ${d("(" + fmtAge(credits.age) + ")")}`;
+      meters.push(g);
     }
 
     //  week — % +  wall-clock reset (all seats, when present)

@@ -165,3 +165,28 @@ test("enterprise seats never show credits", () => {
   });
   assert.doesNotMatch(out, /left/);
 });
+
+// -- staleness ---------------------------------------------------------------
+
+const FRESH_XU = { monthly_limit: 100, used_credits: 3850, utilization: 39, decimal_places: 2 };
+
+test("fresh cache: no age suffix", () => {
+  const out = render({ claudeJson: cjWith(FRESH_XU, Date.now()), payload: PAYLOAD });
+  assert.match(out, /\$61\.50 left(?! \()/);
+});
+
+test("3-hour-old cache: (3h) suffix", () => {
+  const out = render({
+    claudeJson: cjWith(FRESH_XU, Date.now() - 3 * 3600 * 1000),
+    payload: PAYLOAD,
+  });
+  assert.match(out, /\$61\.50 left \(3h\)/);
+});
+
+test("16-day-old cache: (16d) suffix", () => {
+  const out = render({
+    claudeJson: cjWith(FRESH_XU, Date.now() - 16 * 24 * 3600 * 1000),
+    payload: PAYLOAD,
+  });
+  assert.match(out, /\$61\.50 left \(16d\)/);
+});
