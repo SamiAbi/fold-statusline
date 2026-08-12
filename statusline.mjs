@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Claude Code status line — "the deck line" (Fold design, approved 2026-08-06).
-// One line inside a rounded box: title = place ( fold · main ✱3), row =
+// One line inside a rounded box: title = place (fold · main ✱3 ‹worktree›), row =
 // icon-led groups separated by dim │ — user · model+effort · output style ·
 // context (bar + % + time-left) · 5h · week (wall-clock resets) · mcp ·
 // session time.
@@ -12,7 +12,7 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { homedir, userInfo } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, dirname, resolve } from "node:path";
 
 // ---- Fold palette (src/core/theme.css + editor syntax colors), truecolor ----
 const RS = "\x1b[0m";
@@ -41,7 +41,6 @@ const b = (col, s) => col + BOLD + s + RS;
 // Written as \u escapes on purpose: literal PUA glyphs are invisible in most
 // editors, and an accidental deletion looks like nothing happened.
 const I = {
-  plane: "\uf1d8",  // paper plane (fold)
   user: "\uf2bd",   // user-circle
   chip: "\uf2db",   // microchip
   bolt: "\uf0e7",   // effort
@@ -54,6 +53,7 @@ const I = {
   brush: "\uf1fc",  // paint-brush = output style
   fire: "\uf06d",   // context nearly spent
   dollar: "\uf155", // enterprise cost
+  wtree: "\uf402",  // worktree (a checkout living outside the main repo)
 };
 
 // ---- visible width (ANSI stripped; NF PUA glyphs render 1 cell here) ----
@@ -100,7 +100,10 @@ function accountName(oa) {
   try { return userInfo().username; } catch { return process.env.USER || ""; }
 }
 
-// Repo name + branch + dirty count for the title. Best-effort, 1s timeouts.
+// Repo name + branch + dirty count + worktree for the title. Best-effort, 1s
+// timeouts. In a linked worktree, `repo` stays the MAIN repo's name and
+// `worktree` carries the checkout's own folder name — otherwise the title
+// would silently rename the project every time you switch worktrees.
 function gitInfo(cwd) {
   if (!cwd) return null;
   const run = (args) =>
@@ -112,7 +115,18 @@ function gitInfo(cwd) {
     try { repo = basename(run(["rev-parse", "--show-toplevel"])); } catch { /* ignore */ }
     let dirty = 0;
     try { dirty = run(["status", "--porcelain"]).split("\n").filter(Boolean).length; } catch { /* ignore */ }
-    return { repo, branch, dirty };
+    let worktree = "";
+    try {
+      // A linked worktree has its own git dir under the main repo's common dir.
+      const gitDir = run(["rev-parse", "--absolute-git-dir"]);
+      const commonDir = resolve(cwd, run(["rev-parse", "--git-common-dir"]));
+      if (gitDir !== commonDir) {
+        worktree = repo;
+        const mainRoot = basename(commonDir) === ".git" ? dirname(commonDir) : commonDir.replace(/\.git$/, "");
+        repo = basename(mainRoot) || repo;
+      }
+    } catch { /* older git: no worktree marker */ }
+    return { repo, branch, dirty, worktree };
   } catch { return null; }
 }
 
@@ -327,12 +341,13 @@ function main() {
     return { id, meters };
   }
 
-  // ---- title:  repo · branch ✱N (falls back to the cwd basename) ----
-  let title = `${C.border}─ ${RS}${C.accent}${I.plane}${RS} `;
+  // ---- title: repo · branch ✱N  worktree (falls back to the cwd basename) ----
+  let title = `${C.border}─ ${RS}`;
   if (git) {
     title += t(git.repo || basename(cwd || "") || "session");
     title += ` ${d("·")} ${a(git.branch)}`;
     if (git.dirty > 0) title += ` ${C.warn}✱${git.dirty}${RS}`;
+    if (git.worktree) title += ` ${C.purple}${I.wtree}${RS} ${a(git.worktree)}`;
   } else {
     title += t(cwd ? basename(cwd) : "session");
   }

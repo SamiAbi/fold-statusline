@@ -32,7 +32,8 @@ fold-statusline uninstall   # put everything back the way it was
 
 | | Meaning |
 |---|---|
-| <img src="docs/bits/title.svg" height="24"> | The paper plane, the **repo name** (or folder name outside git), the current **branch** in Fold's accent blue — accent always means *location* — and the **dirty count** (changed files in the working tree; hidden when clean) |
+| <img src="docs/bits/title.svg" height="24"> | The **repo name** (or folder name outside git), the current **branch** in Fold's accent blue — accent always means *location* — and the **dirty count** (changed files in the working tree; hidden when clean) |
+| <img src="docs/bits/worktree.svg" height="24"> | In a **git worktree**, the branch-off glyph and the worktree's own directory name follow the dirty count — and the repo name stays the *main* repo's, so the project never appears to rename itself when you switch worktrees. Hidden when you're in a normal checkout |
 
 ### The row: who, what, and how much is left
 
