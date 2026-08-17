@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // fold-statusline CLI — install/uninstall the Fold deck line for Claude Code.
 //   fold-statusline install     copy the status line to ~/.claude and enable it
-//                               (installs Maple Mono NF too when no Nerd Font is found)
+//                               (installs Maple Mono NF when no Nerd Font is found)
 //   fold-statusline font        install the font + show how to enable it in your terminal
+//
+// Icons: inside Fold the statusline uses Fold Icons, which ships INSIDE the
+// Fold app (color bitmap glyphs; nothing to install here). Everywhere else it
+// uses Nerd Font glyphs, which is what the Maple Mono NF install is for.
 //   fold-statusline uninstall   disable it and restore whatever was there before
 //   fold-statusline status      show whether it is installed and enabled
 
@@ -12,7 +16,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "statusline.mjs");
+const PKG = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SRC = join(PKG, "statusline.mjs");
 const CLAUDE_DIR = join(homedir(), ".claude");
 const DEST = join(CLAUDE_DIR, "statusline.mjs");
 const SETTINGS = join(CLAUDE_DIR, "settings.json");
@@ -97,7 +102,7 @@ function fontEnableHint() {
       } else {
         mkdirSync(dirname(cfg), { recursive: true });
         appendFileSync(cfg, `${cur.endsWith("\n") || cur === "" ? "" : "\n"}font-family = Maple Mono NF\n`);
-        ok(`Ghostty config updated (font-family = Maple Mono NF) — reload with cmd+shift+,`);
+        ok(`Ghostty config updated (font-family = Maple Mono NF) - reload with cmd+shift+,`);
       }
     } catch { info(`Ghostty: add  font-family = Maple Mono NF  to ~/.config/ghostty/config`); }
     return;

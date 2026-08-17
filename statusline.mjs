@@ -7,7 +7,9 @@
 // Enterprise seats: the 5h slot collapses and cost takes its place.
 // Always renders the full line at its natural width (no shrinking).
 // Part of fold-statusline — install with `npx github:SamiAbi/fold-statusline`
-// or `fold-statusline install`. Requires a Nerd Font (Maple Mono NF).
+// or `fold-statusline install`. Icons come from Fold Icons (font/ in the
+// repo, installed by the CLI); FOLD_STATUSLINE_ICONS=nerd uses Nerd Font
+// glyphs instead.
 
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
@@ -25,22 +27,34 @@ const fg = (hex) => {
 // terminals' backgrounds they can vanish entirely. Fold sessions export
 // FOLD=1 — inside, use the exact theme; elsewhere, a brighter border/track
 // that stays visible on any dark background.
-const inFold = process.env.FOLD === "1";
+// FOLD=1 is exported by current Fold builds; the GHOSTTY_RESOURCES_DIR probe
+// recognizes older ones (their embedded ghostty lives inside Fold.app).
+const inFold = process.env.FOLD === "1" ||
+  (process.env.GHOSTTY_RESOURCES_DIR || "").includes("Fold.app");
 const C = {
   text: fg("#d5d5e0"), dim: fg("#71718a"), accent: fg("#7aa2f7"),
   ok: fg("#9ece6a"), warn: fg("#e0af68"), danger: fg("#f7768e"),
   cyan: fg("#7dcfff"), purple: fg("#bb9af7"), orange: fg("#ff9e64"), teal: fg("#2ac3de"),
   track: fg(inFold ? "#34344a" : "#4d4d63"), border: fg(inFold ? "#2c2c3a" : "#565672"),
+  // All icons wear this one muted grey (the design system's glyph-grid
+  // treatment) — color on an icon is reserved for state: danger red when a
+  // meter runs hot or an MCP server drops, and the bolt's effort scale.
+  icon: fg("#8b8b9f"),
 };
 const t = (s) => C.text + s + RS;
 const d = (s) => C.dim + s + RS;
 const a = (s) => C.accent + s + RS;
 const b = (col, s) => col + BOLD + s + RS;
 
-// ---- Nerd Font icons (Maple Mono NF; single-width in Fold sessions) ----
+// ---- icons ----
 // Written as \u escapes on purpose: literal PUA glyphs are invisible in most
 // editors, and an accidental deletion looks like nothing happened.
-const I = {
+//
+// Inside Fold: Fold Icons (font/ in this repo, bundled inside the Fold app
+// at U+E900-E90D, a range no Nerd Font occupies). Everywhere else: the Nerd
+// Font originals, since only Fold ships the font. FOLD_STATUSLINE_ICONS=fold
+// or =nerd overrides the detection either way.
+const NERD = {
   user: "\uf2bd",   // user-circle
   chip: "\uf2db",   // microchip
   bolt: "\uf0e7",   // effort
@@ -54,7 +68,15 @@ const I = {
   fire: "\uf06d",   // context nearly spent
   dollar: "\uf155", // enterprise cost
   wtree: "\uf402",  // worktree (a checkout living outside the main repo)
+  mark: "\u25c6",   // no Fold mark in Nerd Fonts - a plain diamond stands in
 };
+const FOLD = {
+  user: "\ue900", chip: "\ue901", bolt: "\ue902", db: "\ue903",
+  hour: "\ue904", cal: "\ue905", clock: "\ue906", puzzle: "\ue907",
+  heart: "\ue908", brush: "\ue909", fire: "\ue90a", dollar: "\ue90b",
+  wtree: "\ue90c", mark: "\ue90d", // the Fold brand mark, leads the title
+};
+const I = (process.env.FOLD_STATUSLINE_ICONS ?? (inFold ? "fold" : "nerd")) === "fold" ? FOLD : NERD;
 
 // ---- visible width (ANSI stripped; NF PUA glyphs render 1 cell here) ----
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -254,14 +276,14 @@ function main() {
 
     //  user
     const user = accountName(oa);
-    if (user) id.push(`${C.cyan}${I.user}${RS}  ${b(C.text, user)}`);
+    if (user) id.push(`${C.icon}${I.user}${RS}  ${b(C.text, user)}`);
 
     //  model ·  effort (+ FAST)
     const model = data?.model?.display_name;
     if (model) {
       const eff = data?.effort?.level;
       const ec = (eff && effortColor[eff]) || C.teal;
-      let g = `${C.purple}${I.chip}${RS}  ${t(model)}`;
+      let g = `${C.icon}${I.chip}${RS}  ${t(model)}`;
       if (eff) g += ` ${ec}${I.bolt} ${eff}${RS}`;
       if (data?.fast_mode) g += ` ${b(C.danger, "FAST")}`;
       id.push(g);
@@ -270,7 +292,7 @@ function main() {
     //  output style — how Claude writes; the default stays quiet (dim)
     const style = data?.output_style?.name;
     if (style) {
-      id.push(`${C.orange}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`);
+      id.push(`${C.icon}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`);
     }
 
     //  context: bar + bold % + ~time-left (falls back to tokens left)
@@ -286,9 +308,9 @@ function main() {
       } else if (leftTok) {
         extra = ` ${d(`${Math.round(leftTok / 1000)}k`)}`;
       }
-      meters.push(`${pct >= 80 ? C.danger : C.teal}${I.db}${RS}  ${bar(pct)} ${b(lc, Math.round(pct) + "%")}${extra}`);
+      meters.push(`${pct >= 80 ? C.danger : C.icon}${I.db}${RS}  ${bar(pct)} ${b(lc, Math.round(pct) + "%")}${extra}`);
     } else {
-      meters.push(`${C.teal}${I.db}${RS}  ${d("—")}`);
+      meters.push(`${C.icon}${I.db}${RS}  ${d("—")}`);
     }
 
     //  5h (subscription only) — % +  wall-clock reset
@@ -296,9 +318,9 @@ function main() {
       const five = rl.five_hour;
       if (five && typeof five.used_percentage === "number") {
         const clock = resetClock(five.resets_at);
-        meters.push(`${C.purple}${I.hour}${RS}  ${b(level(five.used_percentage), Math.round(five.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
+        meters.push(`${C.icon}${I.hour}${RS}  ${b(level(five.used_percentage), Math.round(five.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
       } else {
-        meters.push(`${C.purple}${I.hour}${RS}  ${d("—")}`);
+        meters.push(`${C.icon}${I.hour}${RS}  ${d("—")}`);
       }
     }
 
@@ -306,20 +328,20 @@ function main() {
     const week = rl.seven_day;
     if (week && typeof week.used_percentage === "number") {
       const clock = resetClock(week.resets_at);
-      meters.push(`${C.orange}${I.cal}${RS}  ${b(level(week.used_percentage), Math.round(week.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
+      meters.push(`${C.icon}${I.cal}${RS}  ${b(level(week.used_percentage), Math.round(week.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
     } else if (!enterprise) {
-      meters.push(`${C.orange}${I.cal}${RS}  ${d("—")}`);
+      meters.push(`${C.icon}${I.cal}${RS}  ${d("—")}`);
     }
 
     //  cost — enterprise seats only (takes the collapsed 5h slot)
     if (enterprise) {
       const budget = Number(process.env.CLAUDE_COST_BUDGET);
       if (typeof cost === "number" && cost > 0 && budget > 0) {
-        meters.push(`${C.ok}${I.dollar}${RS}  ${bar((cost / budget) * 100)} ${b(C.ok, "$" + cost.toFixed(2))} ${d("of $" + budget.toFixed(0))}`);
+        meters.push(`${C.icon}${I.dollar}${RS}  ${bar((cost / budget) * 100)} ${b(C.ok, "$" + cost.toFixed(2))} ${d("of $" + budget.toFixed(0))}`);
       } else if (typeof cost === "number" && cost > 0) {
-        meters.push(`${C.ok}${I.dollar}${RS}  ${b(C.ok, "$" + cost.toFixed(2))}`);
+        meters.push(`${C.icon}${I.dollar}${RS}  ${b(C.ok, "$" + cost.toFixed(2))}`);
       } else {
-        meters.push(`${C.ok}${I.dollar}${RS}  ${d("—")}`);
+        meters.push(`${C.icon}${I.dollar}${RS}  ${d("—")}`);
       }
     }
 
@@ -327,7 +349,7 @@ function main() {
     if (mcp) {
       meters.push(mcp.bad > 0
         ? `${C.danger}${I.puzzle}  ${mcp.ok}/${mcp.ok + mcp.bad}${RS}`
-        : `${C.cyan}${I.puzzle}${RS}  ${d(String(mcp.ok))}`);
+        : `${C.icon}${I.puzzle}${RS}  ${d(String(mcp.ok))}`);
     }
 
     //  session duration
@@ -335,19 +357,21 @@ function main() {
     if (typeof ms === "number" && ms > 0) {
       const m = Math.round(ms / 60000);
       const dur = m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`;
-      meters.push(`${C.accent}${I.heart}${RS}  ${d(dur)}`);
+      meters.push(`${C.icon}${I.heart}${RS}  ${d(dur)}`);
     }
 
     return { id, meters };
   }
 
-  // ---- title: repo · branch ✱N  worktree (falls back to the cwd basename) ----
-  let title = `${C.border}─ ${RS}`;
+  // ---- title: mark repo · branch ✱N  worktree (falls back to cwd basename) ----
+  // The Fold mark leads the title in accent blue — its lit faces follow the
+  // text color (COLR), so accent means "where you are" here too.
+  let title = `${C.border}─ ${RS}${C.accent}${I.mark}${RS}  `;
   if (git) {
     title += t(git.repo || basename(cwd || "") || "session");
     title += ` ${d("·")} ${a(git.branch)}`;
     if (git.dirty > 0) title += ` ${C.warn}✱${git.dirty}${RS}`;
-    if (git.worktree) title += ` ${C.purple}${I.wtree}${RS} ${a(git.worktree)}`;
+    if (git.worktree) title += ` ${C.icon}${I.wtree}${RS} ${a(git.worktree)}`;
   } else {
     title += t(cwd ? basename(cwd) : "session");
   }

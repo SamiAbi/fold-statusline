@@ -1,2 +1,5 @@
 node_modules/
 .DS_Store
+font/strikes/
+font/colr-layers.json
+font/FoldIcons.ttf

@@ -12,6 +12,10 @@
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "build:font": "node font/build.mjs && python3 font/colorize.py",
+    "deploy:font": "npm run build:font && cp font/FoldIcons.ttf ../fold/Sources/Fold/Resources/FoldIcons.ttf"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -27,5 +31,9 @@
     "fold"
   ],
   "author": "Sami Abishai",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^15.0.1"
+  }
 }

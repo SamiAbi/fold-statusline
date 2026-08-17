@@ -16,13 +16,13 @@ npx github:SamiAbi/fold-statusline
 
 or clone and run `node bin/cli.mjs install`. The CLI copies `statusline.mjs` to `~/.claude/`, enables it in `~/.claude/settings.json`, and backs up whatever status line you had before — `fold-statusline uninstall` restores it exactly.
 
-**The icons need a Nerd Font.** If none is found, `install` gets [Maple Mono NF](https://github.com/subframe7536/maple-font) for you (Homebrew when available, direct download to your user fonts otherwise) and then tells you exactly where to select it in *your* terminal (Terminal.app, iTerm2, VS Code, WezTerm — and for Ghostty it writes the `font-family` line into the config itself). Selecting the font is the one step no CLI can do for every terminal — it's a per-app setting.
+**Two icon sets, picked by where you are.** Inside [Fold](https://github.com/SamiAbi/fold), the status line uses **Fold Icons** — the design system's folded-glyph set, shipped inside the Fold app itself; there is nothing to install. Everywhere else it falls back to Nerd Font glyphs automatically, which is what the Maple Mono NF install is for: `install` gets [Maple Mono NF](https://github.com/subframe7536/maple-font) when no Nerd Font is found (Homebrew when available, direct download otherwise). `FOLD_STATUSLINE_ICONS=fold` or `=nerd` overrides the detection.
 
 **Requirements:** Claude Code · Node ≥ 18 · a truecolor terminal.
 
 ```sh
-fold-statusline status      # is it installed + enabled? font present?
-fold-statusline font        # just the font install + enable instructions
+fold-statusline status      # is it installed + enabled? fonts present?
+fold-statusline font        # just the fonts: install + enable instructions
 fold-statusline uninstall   # put everything back the way it was
 ```
 
@@ -51,7 +51,7 @@ fold-statusline uninstall   # put everything back the way it was
 | <img src="docs/bits/session.svg" height="24"> | How long this Claude Code **session** has been running |
 | <img src="docs/bits/cost.svg" height="24"> | **Enterprise seats only**: running cost replaces the 5-hour slot (those seats have no 5h window). With `CLAUDE_COST_BUDGET=25` set it becomes a budget bar |
 
-**Color rules** (Fold's design system): meters are green under 50 %, amber to 80 %, red above; the empty bar track and separators stay quiet; **bold** marks only the numbers your eye should land on; the accent blue is reserved for *where you are*.
+**Color rules** (Fold's design system): icons wear one muted grey, so color only ever means something — meters are green under 50 %, amber to 80 %, red above (and a hot meter turns its icon red too); the empty bar track and separators stay quiet; **bold** marks only the numbers your eye should land on; the accent blue is reserved for *where you are*.
 
 ### States you'll see
 
@@ -64,7 +64,15 @@ A single dependency-free Node script that Claude Code invokes with its status JS
 
 ## Design
 
-The palette and grammar come from Fold's design system (Tokyo-Night-adjacent): `#7aa2f7` accent for location, `#9ece6a` / `#e0af68` / `#f7768e` meter thresholds, and the editor's cyan/purple/orange/teal as icon keys. The deck line was chosen from a 25-design exploration; the full spec lives with the Fold project.
+The palette and grammar come from Fold's design system (Tokyo-Night-adjacent): `#7aa2f7` accent for location, `#9ece6a` / `#e0af68` / `#f7768e` meter thresholds, and every icon in one muted grey (`#8b8b9f`, the glyph-grid treatment) — color on an icon is reserved for state: danger red when a meter runs hot or an MCP server drops, and the bolt's effort scale. The deck line was chosen from a 25-design exploration; the full spec lives with the Fold project.
+
+### The icon font
+
+The glyphs are the **folded-glyph set** from Fold's design system (`icons/statusline.html` there): the lit face above the diagonal fold line full-strength, the shadow face ghosted below — the logo's one-light-source facets carried into 24 px icons. [`font/design-icons.mjs`](font/design-icons.mjs) holds the design file's SVG fragments verbatim; [`font/glyphs.mjs`](font/glyphs.mjs) turns them into font outlines through a small geometry kit ([`font/lib/geo.mjs`](font/lib/geo.mjs): an SVG path parser that samples curves into polygons, a containment-depth winding fixer so evenodd artwork renders correctly under the font's nonzero rule, and half-plane clipping for the crease). Three glyphs are drawn here in the same language: `cost` (the design writes it as live text, `$`), `wtree` (not in the set yet), and the brand `mark` from `brand/logo.html`.
+
+In the terminal the glyphs are plain outlines, tinted by ANSI color like any text, with the crease rendered as a thin slit through each form — invisible weight at cell sizes, clearly a fold at display sizes. The font also carries **COLR layers** (the true two-tone, lit face over a 50% ghost) which Chromium-based surfaces such as these README previews render; native terminal rasterizers ignore them and draw the outline. A full color-bitmap pipeline (sbix strikes, state-colored variant codepoints at `U+E90E–E913`) lives in `font/render-strikes.mjs` + `font/rasterize-strikes.py`, currently unused — Ghostty's bitmap sizing proved too erratic to ship.
+
+`npm run build:font` builds the font (`build.mjs` outlines → `colorize.py` COLR layers for the README's previews); `npm run deploy:font` copies the result into the Fold repo (`Sources/Fold/Resources/`), which is the only place the TTF lives — it is not committed or shipped here. The design assigns these icons `U+F8010–F801C` in Fold's flight-glyph font; fold-statusline ships the same artwork at its own BMP range `U+E900–E913`, where terminal width handling is reliable. Codepoints are frozen — appending is fine, reordering is a breaking change.
 
 ## License
 
