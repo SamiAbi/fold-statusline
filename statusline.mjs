@@ -3,7 +3,10 @@
 // One line inside a rounded box: title = place (fold · main ✱3 ‹worktree›), row =
 // icon-led groups separated by dim │ — user · model+effort · output style ·
 // context (bar + % + time-left) · 5h · week (wall-clock resets) · mcp ·
-// session time.
+// session time. The rule BELOW each row is a caption rail naming every value
+// above it (account, model · effort, context used · left, 5h · resets, …), so
+// no number is ever a bare number — and it costs no width, since the box was
+// drawing that rule anyway.
 // Enterprise seats: the 5h slot collapses and cost takes its place.
 // Always renders the full line at its natural width (no shrinking).
 // Part of fold-statusline — install with `npx github:SamiAbi/fold-statusline`
@@ -181,6 +184,70 @@ function bar(pct, width = 10) {
   return level(pct) + "█".repeat(fill) + RS + C.track + "░".repeat(width - fill) + RS;
 }
 
+// ---- the caption rail ----
+// Every group carries a caption, and the box rule directly BELOW a row spells
+// those captions out — so no value is ever a bare number with no noun ("41%"
+// is unmistakably the five-hour window; "23:53" is unmistakably when it
+// resets). It costs no width at all: the captions live in the rule the box was
+// already drawing. Two forms per caption; a rule too narrow for the full set
+// falls back to the short one for that whole row, and to a plain rule if even
+// that will not fit.
+const G = (s, long, short) => ({ s, long, short });
+
+// Placement by block relaxation: each caption wants to sit centred on its own
+// group; captions that would overlap merge into a block that slides as one to
+// the position of least total displacement, so slack anywhere along the rule is
+// shared out instead of shunting every later caption rightwards.
+function placeCaptions(iw, spans, groups, form) {
+  const wanted = [];
+  groups.forEach((g, i) => {
+    const word = g[form];
+    if (!word || !spans[i]) return;
+    const txt = ` ${word} `;
+    wanted.push({ txt, w: txt.length, ideal: Math.round(1 + spans[i].start + spans[i].width / 2 - txt.length / 2) });
+  });
+  if (!wanted.length) return null;
+  const lo = 1, hi = iw - 1;
+  const block = (items) => {
+    let off = 0, sum = 0;
+    for (const it of items) { sum += it.ideal - off; off += it.w; }
+    return { items, w: off, start: Math.round(sum / items.length) };
+  };
+  const blocks = [];
+  for (const it of wanted) {
+    blocks.push(block([it]));
+    for (;;) {
+      const cur = blocks[blocks.length - 1];
+      cur.start = Math.max(lo, Math.min(cur.start, hi - cur.w));
+      const prev = blocks[blocks.length - 2];
+      if (!prev || prev.start + prev.w <= cur.start) break;
+      blocks.splice(blocks.length - 2, 2, block([...prev.items, ...cur.items]));
+    }
+  }
+  const out = [];
+  for (const bl of blocks) {
+    let x = bl.start;
+    for (const it of bl.items) { out.push({ txt: it.txt, start: x }); x += it.w; }
+  }
+  const last = out[out.length - 1];
+  if (out[0].start < lo || last.start + last.txt.length > hi) return null;
+  return out;
+}
+
+// A box rule (├───┤ between rows, ╰───╯ at the foot) carrying the captions for
+// the row above it.
+function railRule(left, right, iw, spans, groups) {
+  const placed = (spans && groups &&
+    (placeCaptions(iw, spans, groups, "long") || placeCaptions(iw, spans, groups, "short"))) || null;
+  if (!placed) return `${C.border}${left}${"─".repeat(iw)}${right}${RS}`;
+  let out = `${C.border}${left}`, x = 0;
+  for (const p of placed) {
+    out += `${"─".repeat(p.start - x)}${RS}${C.dim}${p.txt}${RS}${C.border}`;
+    x = p.start + p.txt.length;
+  }
+  return `${out}${"─".repeat(iw - x)}${right}${RS}`;
+}
+
 const effortColor = { low: C.dim, medium: C.ok, high: C.warn, xhigh: C.danger, max: C.danger };
 
 // ---- MCP cache (detached refresh; rendered as a count) ----
@@ -276,7 +343,7 @@ function main() {
 
     //  user
     const user = accountName(oa);
-    if (user) id.push(`${C.icon}${I.user}${RS}  ${b(C.text, user)}`);
+    if (user) id.push(G(`${C.icon}${I.user}${RS}  ${b(C.text, user)}`, "account", "acct"));
 
     //  model ·  effort (+ FAST)
     const model = data?.model?.display_name;
@@ -286,13 +353,14 @@ function main() {
       let g = `${C.icon}${I.chip}${RS}  ${t(model)}`;
       if (eff) g += ` ${ec}${I.bolt} ${eff}${RS}`;
       if (data?.fast_mode) g += ` ${b(C.danger, "FAST")}`;
-      id.push(g);
+      id.push(G(g, eff ? "model · effort" : "model", "model"));
     }
 
     //  output style — how Claude writes; the default stays quiet (dim)
     const style = data?.output_style?.name;
     if (style) {
-      id.push(`${C.icon}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`);
+      id.push(G(`${C.icon}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`,
+        "output style", "style"));
     }
 
     //  context: bar + bold % + ~time-left (falls back to tokens left)
@@ -308,9 +376,10 @@ function main() {
       } else if (leftTok) {
         extra = ` ${d(`${Math.round(leftTok / 1000)}k`)}`;
       }
-      meters.push(`${pct >= 80 ? C.danger : C.icon}${I.db}${RS}  ${bar(pct)} ${b(lc, Math.round(pct) + "%")}${extra}`);
+      meters.push(G(`${pct >= 80 ? C.danger : C.icon}${I.db}${RS}  ${bar(pct)} ${b(lc, Math.round(pct) + "%")}${extra}`,
+        extra ? "context used · left" : "context used", "context"));
     } else {
-      meters.push(`${C.icon}${I.db}${RS}  ${d("—")}`);
+      meters.push(G(`${C.icon}${I.db}${RS}  ${d("—")}`, "context used", "context"));
     }
 
     //  5h (subscription only) — % +  wall-clock reset
@@ -318,9 +387,10 @@ function main() {
       const five = rl.five_hour;
       if (five && typeof five.used_percentage === "number") {
         const clock = resetClock(five.resets_at);
-        meters.push(`${C.icon}${I.hour}${RS}  ${b(level(five.used_percentage), Math.round(five.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
+        meters.push(G(`${C.icon}${I.hour}${RS}  ${b(level(five.used_percentage), Math.round(five.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`,
+          clock ? "5h · resets" : "5h limit", "5h"));
       } else {
-        meters.push(`${C.icon}${I.hour}${RS}  ${d("—")}`);
+        meters.push(G(`${C.icon}${I.hour}${RS}  ${d("—")}`, "5h limit", "5h"));
       }
     }
 
@@ -328,28 +398,31 @@ function main() {
     const week = rl.seven_day;
     if (week && typeof week.used_percentage === "number") {
       const clock = resetClock(week.resets_at);
-      meters.push(`${C.icon}${I.cal}${RS}  ${b(level(week.used_percentage), Math.round(week.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
+      meters.push(G(`${C.icon}${I.cal}${RS}  ${b(level(week.used_percentage), Math.round(week.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`,
+        clock ? "7d · resets" : "7d limit", "7d"));
     } else if (!enterprise) {
-      meters.push(`${C.icon}${I.cal}${RS}  ${d("—")}`);
+      meters.push(G(`${C.icon}${I.cal}${RS}  ${d("—")}`, "7d limit", "7d"));
     }
 
     //  cost — enterprise seats only (takes the collapsed 5h slot)
     if (enterprise) {
       const budget = Number(process.env.CLAUDE_COST_BUDGET);
       if (typeof cost === "number" && cost > 0 && budget > 0) {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${bar((cost / budget) * 100)} ${b(C.ok, "$" + cost.toFixed(2))} ${d("of $" + budget.toFixed(0))}`);
+        meters.push(G(`${C.icon}${I.dollar}${RS}  ${bar((cost / budget) * 100)} ${b(C.ok, "$" + cost.toFixed(2))} ${d("of $" + budget.toFixed(0))}`,
+          "spent · of budget", "cost"));
       } else if (typeof cost === "number" && cost > 0) {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${b(C.ok, "$" + cost.toFixed(2))}`);
+        meters.push(G(`${C.icon}${I.dollar}${RS}  ${b(C.ok, "$" + cost.toFixed(2))}`, "spent", "cost"));
       } else {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${d("—")}`);
+        meters.push(G(`${C.icon}${I.dollar}${RS}  ${d("—")}`, "spent", "cost"));
       }
     }
 
     //  mcp — count; N/M in red while a server is down
     if (mcp) {
-      meters.push(mcp.bad > 0
+      meters.push(G(mcp.bad > 0
         ? `${C.danger}${I.puzzle}  ${mcp.ok}/${mcp.ok + mcp.bad}${RS}`
-        : `${C.icon}${I.puzzle}${RS}  ${d(String(mcp.ok))}`);
+        : `${C.icon}${I.puzzle}${RS}  ${d(String(mcp.ok))}`,
+        mcp.bad > 0 ? "mcp up · of" : "mcp", "mcp"));
     }
 
     //  session duration
@@ -357,7 +430,7 @@ function main() {
     if (typeof ms === "number" && ms > 0) {
       const m = Math.round(ms / 60000);
       const dur = m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`;
-      meters.push(`${C.icon}${I.heart}${RS}  ${d(dur)}`);
+      meters.push(G(`${C.icon}${I.heart}${RS}  ${d(dur)}`, "session", "up"));
     }
 
     return { id, meters };
@@ -383,24 +456,34 @@ function main() {
   const cols = termCols();
   const { id, meters } = buildGroups();
   const all = [...id, ...meters];
-  const rowWidth = (gs) => gs.reduce((w, g) => w + vis(g), 0) + (gs.length - 1) * 5;
+  const rowWidth = (gs) => gs.reduce((w, g) => w + vis(g.s), 0) + (gs.length - 1) * 5;
 
-  // join with gaps stretched evenly so the row is exactly `target` wide
+  // Join with gaps stretched evenly so the row is exactly `target` wide, and
+  // report where each group ended up — the rule below the row centres that
+  // group's caption on those coordinates.
   function joinJustify(gs, target) {
-    if (gs.length === 0) return "";
-    if (gs.length === 1) return gs[0] + " ".repeat(Math.max(0, target - vis(gs[0])));
+    if (gs.length === 0) return { row: "", spans: [] };
+    if (gs.length === 1) {
+      const w = vis(gs[0].s);
+      return { row: gs[0].s + " ".repeat(Math.max(0, target - w)), spans: [{ start: 0, width: w }] };
+    }
     let extra = Math.max(0, target - rowWidth(gs));
     const gaps = gs.length - 1;
     const per = Math.floor(extra / gaps);
     let rem = extra % gaps;
-    let out = gs[0];
+    let out = gs[0].s;
+    let x = vis(gs[0].s);
+    const spans = [{ start: 0, width: x }];
     for (let i = 1; i < gs.length; i++) {
       const add = per + (rem-- > 0 ? 1 : 0);
       const before = 2 + Math.ceil(add / 2);
       const after = 2 + Math.floor(add / 2);
-      out += `${" ".repeat(before)}${C.track}│${RS}${" ".repeat(after)}${gs[i]}`;
+      out += `${" ".repeat(before)}${C.track}│${RS}${" ".repeat(after)}${gs[i].s}`;
+      x += before + 1 + after;
+      spans.push({ start: x, width: vis(gs[i].s) });
+      x += vis(gs[i].s);
     }
-    return out;
+    return { row: out, spans };
   }
 
   // order-preserving split of the groups into n rows, minimizing the widest row
@@ -426,15 +509,12 @@ function main() {
     return best;
   }
 
-  // rows with "DIV" (rendered as ├───┤) between each content row
+  // one entry per content row; the rules between and below them are drawn at
+  // assembly, each carrying its own row's captions
   function layout(n) {
     const { parts, max } = bestSplit(all, n);
     const target = Math.max(max, vis(title));
-    const rows = [];
-    parts.forEach((p, i) => {
-      if (i) rows.push("DIV");
-      rows.push(joinJustify(p, target));
-    });
+    const rows = parts.map((p) => ({ ...joinJustify(p, target), groups: p }));
     return { rows, width: target + 4 };
   }
 
@@ -448,17 +528,16 @@ function main() {
     rows = two.width <= cols - 1 ? two.rows : layout(3).rows;
   }
 
-  const iw = Math.max(...rows.map((r) => vis(r) + 2), vis(title) + 2);
-  const top = `${C.border}╭${RS}${title}${C.border}${"─".repeat(iw - vis(title))}╮${RS}`;
-  const mids = rows.map((r) =>
-    r === "DIV"
-      ? `${C.border}├${"─".repeat(iw)}┤${RS}`
-      : `${C.border}│${RS} ${r}${" ".repeat(iw - 2 - vis(r))} ${C.border}│${RS}`,
-  );
-  const bottom = `${C.border}╰${"─".repeat(iw)}╯${RS}`;
+  const iw = Math.max(...rows.map((r) => vis(r.row) + 2), vis(title) + 2);
+  const lines = [`${C.border}╭${RS}${title}${C.border}${"─".repeat(iw - vis(title))}╮${RS}`];
+  rows.forEach((r, i) => {
+    lines.push(`${C.border}│${RS} ${r.row}${" ".repeat(iw - 2 - vis(r.row))} ${C.border}│${RS}`);
+    const last = i === rows.length - 1;
+    lines.push(railRule(last ? "╰" : "├", last ? "╯" : "┤", iw, r.spans, r.groups));
+  });
 
   // Trailing U+2800 spacer survives the status-line trimmer (blank gap above input).
-  process.stdout.write(`${top}\n${mids.join("\n")}\n${bottom}\n⠀`);
+  process.stdout.write(`${lines.join("\n")}\n⠀`);
 }
 
 main();

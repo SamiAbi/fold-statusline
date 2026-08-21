@@ -13,6 +13,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "build:docs": "node docs/render-svg.mjs",
     "build:font": "node font/build.mjs && python3 font/colorize.py",
     "deploy:font": "npm run build:font && cp font/FoldIcons.ttf ../fold/Sources/Fold/Resources/FoldIcons.ttf"
   },
