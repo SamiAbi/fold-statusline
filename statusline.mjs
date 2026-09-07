@@ -1,464 +1,396 @@
 #!/usr/bin/env node
-// Claude Code status line — "the deck line" (Fold design, approved 2026-08-06).
-// One line inside a rounded box: title = place (fold · main ✱3 ‹worktree›), row =
-// icon-led groups separated by dim │ — user · model+effort · output style ·
-// context (bar + % + time-left) · 5h · week (wall-clock resets) · mcp ·
-// session time.
-// Enterprise seats: the 5h slot collapses and cost takes its place.
-// Always renders the full line at its natural width (no shrinking).
-// Part of fold-statusline — install with `npx github:SamiAbi/fold-statusline`
-// or `fold-statusline install`. Icons come from Fold Icons (font/ in the
-// repo, installed by the CLI); FOLD_STATUSLINE_ICONS=nerd uses Nerd Font
-// glyphs instead.
+// fold-statusline — the Fold status line for Claude Code.
+// Installed as ~/.claude/statusline.mjs by `npx github:SamiAbi/fold-statusline`.
+//
+// Six facts in a framed table, nothing else:
+//   who · model+effort · context · 5h limit · week limit · Fable week limit
+//
+// Where each fact comes from:
+//   who      ~/.claude.json  → oauthAccount.emailAddress
+//   model    stdin payload   → model.display_name + effort.level
+//   context  stdin payload   → context_window.used_percentage
+//   5h / 7d  stdin payload   → rate_limits.five_hour / .seven_day   (live)
+//   Fable    api.anthropic.com/api/oauth/usage, refreshed in the
+//            background into ~/.claude/status-limits.json — the payload
+//            does not carry per-model weekly limits.
 
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
-import { homedir, userInfo } from "node:os";
-import { join, basename, dirname, resolve } from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { spawn, execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-// ---- Fold palette (src/core/theme.css + editor syntax colors), truecolor ----
-const RS = "\x1b[0m";
-const BOLD = "\x1b[1m";
+const HOME = os.homedir();
+const SELF = fileURLToPath(import.meta.url);
+const LIMITS_CACHE = `${HOME}/.claude/status-limits.json`;
+const LIMITS_MAX_AGE_MS = 120_000;
+
+// ── background refresh mode ────────────────────────────────────────────────
+if (process.argv[2] === "--refresh") { await refreshLimits(); process.exit(0); }
+
+// ── paint ──────────────────────────────────────────────────────────────────
+const E = "\x1b[0m";
 const fg = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m`;
 };
-// Chrome colors are tuned against Fold's #16161e background; on other
-// terminals' backgrounds they can vanish entirely. Fold sessions export
-// FOLD=1 — inside, use the exact theme; elsewhere, a brighter border/track
-// that stays visible on any dark background.
-// FOLD=1 is exported by current Fold builds; the GHOSTTY_RESOURCES_DIR probe
-// recognizes older ones (their embedded ghostty lives inside Fold.app).
-const inFold = process.env.FOLD === "1" ||
-  (process.env.GHOSTTY_RESOURCES_DIR || "").includes("Fold.app");
 const C = {
-  text: fg("#d5d5e0"), dim: fg("#71718a"), accent: fg("#7aa2f7"),
-  ok: fg("#9ece6a"), warn: fg("#e0af68"), danger: fg("#f7768e"),
-  cyan: fg("#7dcfff"), purple: fg("#bb9af7"), orange: fg("#ff9e64"), teal: fg("#2ac3de"),
-  track: fg(inFold ? "#34344a" : "#4d4d63"), border: fg(inFold ? "#2c2c3a" : "#565672"),
-  // All icons wear this one muted grey (the design system's glyph-grid
-  // treatment) — color on an icon is reserved for state: danger red when a
-  // meter runs hot or an MCP server drops, and the bolt's effort scale.
-  icon: fg("#8b8b9f"),
+  mail: fg("#7dcfff"),   // cyan
+  name: fg("#c8c8d4"),
+  model: fg("#bb9af7"),  // purple
+  effort: fg("#ff9e64"), // orange
+  badge: fg("#2ac3de"),  // teal
+  label: fg("#6a6a80"),
+  dim: fg("#5a5a70"),
+  rule: fg("#3a3a4c"),
+  ok: fg("#9ece6a"),     // green
+  warn: fg("#e0af68"),   // amber
+  hot: fg("#f7768e"),    // red
+  empty: fg("#33334a"),
 };
-const t = (s) => C.text + s + RS;
-const d = (s) => C.dim + s + RS;
-const a = (s) => C.accent + s + RS;
-const b = (col, s) => col + BOLD + s + RS;
+const B = "\x1b[1m";
+const paint = (c, s) => `${c}${s}${E}`;
+const bold = (c, s) => `${c}${B}${s}${E}`;
 
-// ---- icons ----
-// Written as \u escapes on purpose: literal PUA glyphs are invisible in most
-// editors, and an accidental deletion looks like nothing happened.
+// Icons, as \u escapes on purpose: literal PUA glyphs are invisible in an
+// editor and a stray deletion looks like nothing happened.
 //
-// Inside Fold: Fold Icons (font/ in this repo, bundled inside the Fold app
-// at U+E900-E90D, a range no Nerd Font occupies). Everywhere else: the Nerd
-// Font originals, since only Fold ships the font. FOLD_STATUSLINE_ICONS=fold
-// or =nerd overrides the detection either way.
-const NERD = {
-  user: "\uf2bd",   // user-circle
-  chip: "\uf2db",   // microchip
-  bolt: "\uf0e7",   // effort
-  db: "\uf1c0",     // database = context tokens
-  hour: "\uf252",   // hourglass-half = 5h window
-  cal: "\uf073",    // calendar = week window
-  clock: "\uf017",  // reset time
-  puzzle: "\uf12e", // mcp
-  heart: "\uf21e",  // heartbeat = session
-  brush: "\uf1fc",  // paint-brush = output style
-  fire: "\uf06d",   // context nearly spent
-  dollar: "\uf155", // enterprise cost
-  wtree: "\uf402",  // worktree (a checkout living outside the main repo)
-  mark: "\u25c6",   // no Fold mark in Nerd Fonts - a plain diamond stands in
-};
+// Inside Fold the Fold Icons font is on the terminal (U+E900-E913, a range no
+// Nerd Font occupies). Everywhere else the Nerd Font originals, since only
+// Fold ships that font. STATUS_ICONS=fold|nerd forces either way.
+const inFold =
+  process.env.FOLD === "1" ||
+  (process.env.GHOSTTY_RESOURCES_DIR || "").includes("Fold.app");
+
 const FOLD = {
-  user: "\ue900", chip: "\ue901", bolt: "\ue902", db: "\ue903",
-  hour: "\ue904", cal: "\ue905", clock: "\ue906", puzzle: "\ue907",
-  heart: "\ue908", brush: "\ue909", fire: "\ue90a", dollar: "\ue90b",
-  wtree: "\ue90c", mark: "\ue90d", // the Fold brand mark, leads the title
+  user: "\ue900", chip: "\ue901", db: "\ue903", dbHot: "\ue90e",
+  hour: "\ue904", cal: "\ue905", clock: "\ue906",
+  // Fold draws the effort bolt at four heights; the Nerd set has only one.
+  bolt: { low: "\ue910", medium: "\ue911", high: "\ue912", max: "\ue913" },
+  boltAny: "\ue902",
 };
-const I = (process.env.FOLD_STATUSLINE_ICONS ?? (inFold ? "fold" : "nerd")) === "fold" ? FOLD : NERD;
+const NERD = {
+  user: "\uf2bd",  // user-circle
+  chip: "\uf2db",  // microchip
+  db: "\uf1c0",    // database = context
+  dbHot: "\uf06d", // fire = context nearly spent
+  hour: "\uf252",  // hourglass-half = 5h window
+  cal: "\uf073",   // calendar = a weekly window
+  clock: "\uf017", // reset time
+  bolt: {},
+  boltAny: "\uf0e7",
+};
+const ICON = (process.env.STATUS_ICONS ?? (inFold ? "fold" : "nerd")) === "fold" ? FOLD : NERD;
+const boltFor = (level) => ICON.bolt[String(level).toLowerCase()] ?? ICON.boltAny;
 
-// ---- visible width (ANSI stripped; NF PUA glyphs render 1 cell here) ----
-const ANSI = /\x1b\[[0-9;]*m/g;
-const vis = (s) => [...s.replace(ANSI, "")].length;
+const level = (pct) => (pct >= 80 ? C.hot : pct >= 50 ? C.warn : C.ok);
 
-// ---- terminal width, best-effort: the payload has no width, but this process
-// still has the controlling tty. Unknown → assume wide (full design). ----
-function termCols() {
-  const forced = Number(process.env.STATUSLINE_COLS); // test override
-  if (forced > 0) return forced;
+// Bar length in cells. Short bars read as a stub — at six cells a full bar is
+// a thumbnail and 98% looks like nothing. STATUS_BAR overrides.
+const CELLS = (() => {
+  const n = Number(process.env.STATUS_BAR);
+  return Number.isFinite(n) && n >= 4 ? Math.round(n) : 16;
+})();
+function bar(pct) {
+  const p = Math.max(0, Math.min(100, pct));
+  // Any real usage shows at least one lit cell — an empty bar means zero.
+  let full = Math.round((p / 100) * CELLS);
+  if (p > 0 && full === 0) full = 1;
+  return paint(level(p), "█".repeat(full)) + paint(C.empty, "░".repeat(CELLS - full));
+}
+
+// Every row is: icon, label column, then the value. The label column and the
+// percent are padded to a fixed width so the bars and numbers stack.
+const LABEL_W = 5;
+const lab = (text) => paint(C.label, text.padEnd(LABEL_W));
+
+function meter(icon, label, pct, resetsAt, { withDay = false, hotIcon = null } = {}) {
+  const glyph = hotIcon && Number.isFinite(pct) && pct >= 80 ? hotIcon : icon;
+  const head = `${paint(Number.isFinite(pct) ? level(pct) : C.label, glyph)} ${lab(label)}`;
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) {
+    return `${head} ${paint(C.dim, "\u2014")}`;
+  }
+  const p = Math.round(pct);
+  const clock = resetsAt ? clockOf(resetsAt, withDay) : "";
+  return (
+    `${head} ${bar(p)} ${bold(level(p), String(p + "%").padStart(4))}` +
+    (clock ? `  ${paint(C.dim, ICON.clock + " " + clock)}` : "")
+  );
+}
+
+function clockOf(when, withDay) {
+  // Two shapes in the wild: unix seconds (the stdin payload) and an ISO
+  // string (the usage endpoint).
+  const d = typeof when === "number" ? new Date(when * 1000) : new Date(when);
+  if (!Number.isFinite(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const sameDay = d.toDateString() === new Date().toDateString();
+  if (sameDay || !withDay) return `${hh}:${mm}`;
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  return `${day} ${hh}:${mm}`;
+}
+
+// ── facts ──────────────────────────────────────────────────────────────────
+const payload = await readStdin();
+
+function accountEmail() {
   try {
-    const out = execFileSync("sh", ["-c", "stty size < /dev/tty"],
-      { encoding: "utf8", timeout: 300, stdio: ["ignore", "pipe", "ignore"] }).trim();
-    const c = Number(out.split(/\s+/)[1]);
-    if (c > 0) return c;
-  } catch { /* no controlling tty */ }
-  const env = Number(process.env.COLUMNS);
-  if (env > 0) return env;
-  return 9999; // unknown: never shrink the approved design on a guess
-}
-
-function readStdin() {
-  try { return readFileSync(0, "utf8"); } catch { return ""; }
-}
-
-function oauthAccount() {
-  try {
-    return JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8")).oauthAccount || {};
-  } catch { return {}; }
-}
-
-function isEnterprisePlan(oa) {
-  if (process.env.STATUSLINE_ENTERPRISE === "1") return true; // test override
-  return /enterprise/i.test(oa.organizationType || "") ||
-         /enterprise|usage_based/i.test(oa.seatTier || "");
-}
-
-// Local part of the account email (the deck line shows who, not the domain).
-function accountName(oa) {
-  const email = oa.emailAddress || "";
-  if (email) return email.split("@")[0];
-  if (oa.displayName) return oa.displayName;
-  try { return userInfo().username; } catch { return process.env.USER || ""; }
-}
-
-// Repo name + branch + dirty count + worktree for the title. Best-effort, 1s
-// timeouts. In a linked worktree, `repo` stays the MAIN repo's name and
-// `worktree` carries the checkout's own folder name — otherwise the title
-// would silently rename the project every time you switch worktrees.
-function gitInfo(cwd) {
-  if (!cwd) return null;
-  const run = (args) =>
-    execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1000 }).trim();
-  try {
-    const branch = run(["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (!branch) return null;
-    let repo = "";
-    try { repo = basename(run(["rev-parse", "--show-toplevel"])); } catch { /* ignore */ }
-    let dirty = 0;
-    try { dirty = run(["status", "--porcelain"]).split("\n").filter(Boolean).length; } catch { /* ignore */ }
-    let worktree = "";
-    try {
-      // A linked worktree has its own git dir under the main repo's common dir.
-      const gitDir = run(["rev-parse", "--absolute-git-dir"]);
-      const commonDir = resolve(cwd, run(["rev-parse", "--git-common-dir"]));
-      if (gitDir !== commonDir) {
-        worktree = repo;
-        const mainRoot = basename(commonDir) === ".git" ? dirname(commonDir) : commonDir.replace(/\.git$/, "");
-        repo = basename(mainRoot) || repo;
-      }
-    } catch { /* older git: no worktree marker */ }
-    return { repo, branch, dirty, worktree };
+    const j = JSON.parse(fs.readFileSync(`${HOME}/.claude.json`, "utf8"));
+    return j?.oauthAccount?.emailAddress ?? null;
   } catch { return null; }
 }
 
-// resets_at (epoch s) → wall clock: "14:32" if within 24h, else weekday "Fri".
-function resetClock(sec) {
-  if (typeof sec !== "number") return null;
-  const dt = new Date(sec * 1000);
-  if (sec * 1000 - Date.now() < 24 * 3600 * 1000) {
-    return `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
-  }
-  return dt.toLocaleDateString("en-US", { weekday: "short" });
-}
-
-function fmtDur(mins) {
-  if (mins < 60) return `~${Math.max(1, Math.round(mins))}m`;
-  return `~${Math.round(mins / 60)}h`;
-}
-
-// Meter hue by threshold: quiet green under 50, amber to 80, red above.
-function level(pct) {
-  if (pct >= 80) return C.danger;
-  if (pct >= 50) return C.warn;
-  return C.ok;
-}
-
-function bar(pct, width = 10) {
-  let fill = Math.round((pct / 100) * width);
-  if (pct > 0 && fill === 0) fill = 1;
-  fill = Math.max(0, Math.min(width, fill));
-  return level(pct) + "█".repeat(fill) + RS + C.track + "░".repeat(width - fill) + RS;
-}
-
-const effortColor = { low: C.dim, medium: C.ok, high: C.warn, xhigh: C.danger, max: C.danger };
-
-// ---- MCP cache (detached refresh; rendered as a count) ----
-const MCP_CACHE = join(homedir(), ".claude", "mcp-status.cache");
-const MCP_TTL_MS = 120000;
-function mcpRefreshIfStale() {
-  let age = Infinity;
-  try { age = Date.now() - statSync(MCP_CACHE).mtimeMs; } catch { /* none */ }
-  if (age < MCP_TTL_MS) return;
-  const tmp = `${MCP_CACHE}.tmp`;
-  try { if (Date.now() - statSync(tmp).mtimeMs < 15000) return; } catch { /* no lock */ }
+function readLimitsCache() {
   try {
-    spawn("sh", ["-c", `claude mcp list > "${tmp}" 2>/dev/null && mv "${tmp}" "${MCP_CACHE}"`],
-      { detached: true, stdio: "ignore" }).unref();
-  } catch { /* ignore */ }
-}
-// → {ok, bad} counts; auth-pending connectors are ignored (effectively disabled).
-function mcpCounts() {
-  mcpRefreshIfStale();
-  let raw = "";
-  try { raw = readFileSync(MCP_CACHE, "utf8"); } catch { return null; }
-  let ok = 0, bad = 0;
-  for (const line of raw.split("\n")) {
-    const m = line.match(/^(.+?):\s+https?:\/\/.*?-\s+(.+)$/);
-    if (!m) continue;
-    const st = m[2];
-    if (/Connected|✔/.test(st)) ok++;
-    else if (/fail|✗|✘/i.test(st)) bad++;
-  }
-  return ok + bad > 0 ? { ok, bad } : null;
+    const j = JSON.parse(fs.readFileSync(LIMITS_CACHE, "utf8"));
+    return j && typeof j === "object" ? j : null;
+  } catch { return null; }
 }
 
-// ---- main ----
-function main() {
-  let data = {};
-  try { data = JSON.parse(readStdin() || "{}"); } catch { /* bare */ }
+// Pick the weekly limit scoped to one model out of whatever shape the usage
+// endpoint hands back. Two known shapes: a `limits` array of weekly_scoped
+// entries carrying scope.model.display_name, and flat seven_day_<model> keys.
+function scopedWeek(raw, wanted) {
+  if (!raw) return null;
+  const want = wanted.toLowerCase();
+  const rl = raw.rate_limits ?? raw;
 
-  // Usage cache: last-known values per session + burn-rate samples.
-  // rate_limits are account-global (reused across sessions); context/cost are
-  // per-session. samples[] = {t, used} context-token samples for burn rate.
-  const USAGE_CACHE = join(homedir(), ".claude", "statusline-usage.cache");
-  let cache = {};
-  try { cache = JSON.parse(readFileSync(USAGE_CACHE, "utf8")); } catch { /* none */ }
-  const sameSession = cache.session_id && cache.session_id === data.session_id;
-  let cacheDirty = false;
-
-  if (data.rate_limits != null) { cache.rate_limits = data.rate_limits; cacheDirty = true; }
-  else if (cache.rate_limits != null) data.rate_limits = cache.rate_limits;
-
-  let ownerDirty = false;
-  for (const k of ["context_window", "cost"]) {
-    if (data[k] != null) { cache[k] = data[k]; cacheDirty = true; ownerDirty = true; }
-    else if (sameSession && cache[k] != null) data[k] = cache[k];
-  }
-  if (ownerDirty) cache.session_id = data.session_id;
-
-  // burn-rate samples: only within one session, min 15s apart, keep last 6
-  const ctx = data.context_window;
-  let rate = null; // tokens per minute
-  if (ctx && typeof ctx.used_percentage === "number" && ctx.context_window_size) {
-    const used = Math.round((ctx.context_window_size * ctx.used_percentage) / 100);
-    if (!sameSession) cache.samples = [];
-    const s = cache.samples || [];
-    const last = s[s.length - 1];
-    if (!last || Date.now() - last.t > 15000) {
-      s.push({ t: Date.now(), used });
-      cache.samples = s.slice(-6);
-      cacheDirty = true;
-    }
-    const win = cache.samples || [];
-    if (win.length >= 2) {
-      const dt = (win[win.length - 1].t - win[0].t) / 60000;
-      const dTok = win[win.length - 1].used - win[0].used;
-      if (dt > 0.2 && dTok > 0) rate = dTok / dt;
-    }
-  }
-  if (cacheDirty) { try { writeFileSync(USAGE_CACHE, JSON.stringify(cache)); } catch { /* ignore */ } }
-
-  const oa = oauthAccount();
-  const enterprise = isEnterprisePlan(oa);
-  const cwd = data?.workspace?.current_dir || data?.cwd;
-  const git = gitInfo(cwd);
-  const rl = data?.rate_limits || {};
-  const cost = data?.cost?.total_cost_usd;
-  const mcp = mcpCounts();
-
-  // Exactly two cases: the full approved deck line on one row, or — only when
-  // that row would be cut off — the SAME content folded onto two rows: row 1 =
-  // who/what (user, model), row 2 = the budgets. Nothing dropped or shortened.
-  function buildGroups() {
-    const id = [];
-    const meters = [];
-
-    //  user
-    const user = accountName(oa);
-    if (user) id.push(`${C.icon}${I.user}${RS}  ${b(C.text, user)}`);
-
-    //  model ·  effort (+ FAST)
-    const model = data?.model?.display_name;
-    if (model) {
-      const eff = data?.effort?.level;
-      const ec = (eff && effortColor[eff]) || C.teal;
-      let g = `${C.icon}${I.chip}${RS}  ${t(model)}`;
-      if (eff) g += ` ${ec}${I.bolt} ${eff}${RS}`;
-      if (data?.fast_mode) g += ` ${b(C.danger, "FAST")}`;
-      id.push(g);
-    }
-
-    //  output style — how Claude writes; the default stays quiet (dim)
-    const style = data?.output_style?.name;
-    if (style) {
-      id.push(`${C.icon}${I.brush}${RS}  ${style === "default" ? d(style) : t(style)}`);
-    }
-
-    //  context: bar + bold % + ~time-left (falls back to tokens left)
-    if (ctx && typeof ctx.used_percentage === "number") {
-      const pct = ctx.used_percentage;
-      const lc = level(pct);
-      const size = ctx.context_window_size || 0;
-      const leftTok = size ? Math.round((size * (100 - pct)) / 100) : 0;
-      let extra = "";
-      if (rate && leftTok) {
-        const mins = leftTok / rate;
-        extra = pct >= 80 ? ` ${C.danger}${I.fire} ${fmtDur(mins)}${RS}` : ` ${d(fmtDur(mins))}`;
-      } else if (leftTok) {
-        extra = ` ${d(`${Math.round(leftTok / 1000)}k`)}`;
-      }
-      meters.push(`${pct >= 80 ? C.danger : C.icon}${I.db}${RS}  ${bar(pct)} ${b(lc, Math.round(pct) + "%")}${extra}`);
-    } else {
-      meters.push(`${C.icon}${I.db}${RS}  ${d("—")}`);
-    }
-
-    //  5h (subscription only) — % +  wall-clock reset
-    if (!enterprise) {
-      const five = rl.five_hour;
-      if (five && typeof five.used_percentage === "number") {
-        const clock = resetClock(five.resets_at);
-        meters.push(`${C.icon}${I.hour}${RS}  ${b(level(five.used_percentage), Math.round(five.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
-      } else {
-        meters.push(`${C.icon}${I.hour}${RS}  ${d("—")}`);
-      }
-    }
-
-    //  week — % +  wall-clock reset (all seats, when present)
-    const week = rl.seven_day;
-    if (week && typeof week.used_percentage === "number") {
-      const clock = resetClock(week.resets_at);
-      meters.push(`${C.icon}${I.cal}${RS}  ${b(level(week.used_percentage), Math.round(week.used_percentage) + "%")}${clock ? ` ${d(I.clock + " " + clock)}` : ""}`);
-    } else if (!enterprise) {
-      meters.push(`${C.icon}${I.cal}${RS}  ${d("—")}`);
-    }
-
-    //  cost — enterprise seats only (takes the collapsed 5h slot)
-    if (enterprise) {
-      const budget = Number(process.env.CLAUDE_COST_BUDGET);
-      if (typeof cost === "number" && cost > 0 && budget > 0) {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${bar((cost / budget) * 100)} ${b(C.ok, "$" + cost.toFixed(2))} ${d("of $" + budget.toFixed(0))}`);
-      } else if (typeof cost === "number" && cost > 0) {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${b(C.ok, "$" + cost.toFixed(2))}`);
-      } else {
-        meters.push(`${C.icon}${I.dollar}${RS}  ${d("—")}`);
-      }
-    }
-
-    //  mcp — count; N/M in red while a server is down
-    if (mcp) {
-      meters.push(mcp.bad > 0
-        ? `${C.danger}${I.puzzle}  ${mcp.ok}/${mcp.ok + mcp.bad}${RS}`
-        : `${C.icon}${I.puzzle}${RS}  ${d(String(mcp.ok))}`);
-    }
-
-    //  session duration
-    const ms = data?.cost?.total_duration_ms;
-    if (typeof ms === "number" && ms > 0) {
-      const m = Math.round(ms / 60000);
-      const dur = m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`;
-      meters.push(`${C.icon}${I.heart}${RS}  ${d(dur)}`);
-    }
-
-    return { id, meters };
+  for (const entry of rl?.limits ?? []) {
+    const name = entry?.scope?.model?.display_name;
+    if (!name || !name.toLowerCase().includes(want)) continue;
+    const pct = entry.percent ?? entry.utilization;
+    if (pct === null || pct === undefined) continue;
+    return { name, pct, resetsAt: entry.resets_at ?? null };
   }
 
-  // ---- title: mark repo · branch ✱N  worktree (falls back to cwd basename) ----
-  // The Fold mark leads the title in accent blue — its lit faces follow the
-  // text color (COLR), so accent means "where you are" here too.
-  let title = `${C.border}─ ${RS}${C.accent}${I.mark}${RS}  `;
-  if (git) {
-    title += t(git.repo || basename(cwd || "") || "session");
-    title += ` ${d("·")} ${a(git.branch)}`;
-    if (git.dirty > 0) title += ` ${C.warn}✱${git.dirty}${RS}`;
-    if (git.worktree) title += ` ${C.icon}${I.wtree}${RS} ${a(git.worktree)}`;
-  } else {
-    title += t(cwd ? basename(cwd) : "session");
+  for (const [key, v] of Object.entries(rl ?? {})) {
+    if (!key.startsWith("seven_day_") || !key.slice(10).toLowerCase().includes(want)) continue;
+    const pct = v?.utilization ?? v?.percent ?? v?.used_percentage;
+    if (pct === null || pct === undefined) continue;
+    return { name: wanted, pct, resetsAt: v?.resets_at ?? null };
   }
-  title += " ";
+  return null;
+}
 
-  // ---- assemble: one row when it fits; otherwise the same content on two
-  // BALANCED rows — split where the two halves are closest in width, then
-  // each row's gaps stretch so both fill the box edge-to-edge. ----
-  const cols = termCols();
-  const { id, meters } = buildGroups();
-  const all = [...id, ...meters];
-  const rowWidth = (gs) => gs.reduce((w, g) => w + vis(g), 0) + (gs.length - 1) * 5;
+const email = accountEmail();
+// "Opus 5 (1M context)" says the same thing twice once the 1M badge is on the
+// row, and the parenthetical drags the whole value column wider. Keep the
+// short name, let the badge carry the fact.
+const modelRaw = payload?.model?.display_name ?? null;
+const model = modelRaw ? modelRaw.replace(/\s*\(1M context\)\s*/i, "").trim() : null;
+const modelId = payload?.model?.id ?? "";
+const effort = payload?.effort?.level ?? null;
+const wide = /\[1m\]/i.test(modelId) || /1m context/i.test(modelRaw ?? "");
 
-  // join with gaps stretched evenly so the row is exactly `target` wide
-  function joinJustify(gs, target) {
-    if (gs.length === 0) return "";
-    if (gs.length === 1) return gs[0] + " ".repeat(Math.max(0, target - vis(gs[0])));
-    let extra = Math.max(0, target - rowWidth(gs));
-    const gaps = gs.length - 1;
-    const per = Math.floor(extra / gaps);
-    let rem = extra % gaps;
-    let out = gs[0];
-    for (let i = 1; i < gs.length; i++) {
-      const add = per + (rem-- > 0 ? 1 : 0);
-      const before = 2 + Math.ceil(add / 2);
-      const after = 2 + Math.floor(add / 2);
-      out += `${" ".repeat(before)}${C.track}│${RS}${" ".repeat(after)}${gs[i]}`;
+const ctxPct = payload?.context_window?.used_percentage ?? null;
+const fivePayload = payload?.rate_limits?.five_hour ?? null;
+const weekPayload = payload?.rate_limits?.seven_day ?? null;
+
+const cache = readLimitsCache();
+
+// The payload has no rate_limits until the session's first API reply, so a
+// fresh session would draw three dashes. The usage endpoint we already poll
+// for Fable carries the same two numbers — use them until the live ones land.
+function cachedLimit(key) {
+  const rl = cache?.raw?.rate_limits ?? cache?.raw;
+  const v = rl?.[key];
+  const pct = v?.utilization ?? v?.percent;
+  return Number.isFinite(pct) ? { used_percentage: pct, resets_at: v?.resets_at ?? null } : null;
+}
+if (!cache || Date.now() - (cache.fetchedAt ?? 0) > LIMITS_MAX_AGE_MS) kickRefresh();
+const five = fivePayload ?? cachedLimit("five_hour");
+const week = weekPayload ?? cachedLimit("seven_day");
+const fable = scopedWeek(cache?.raw, "fable");
+
+// ── the table ──────────────────────────────────────────────────────────────
+// Every row is the same four cells, so the columns line up down the whole
+// block: glyph, label, value, amount, when. A row that has nothing to put in
+// a cell leaves it empty rather than closing the gap.
+//
+//   glyph  label   value    amount   when
+//   ────────────────────────────────────────────
+//    email   samyabab@…      (spans value..when)
+//    model   Opus 5     high      1M
+//    ctx     █░░░░░       7%
+//    5h      █░░░░░      12%   14:00
+
+const bare = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+// Nerd Font and Fold PUA glyphs each draw in one cell, so counting code
+// points — not UTF-16 units — is the right measure.
+const cells = (s) => [...bare(s)].length;
+const padL = (s, w) => s + " ".repeat(Math.max(0, w - cells(s)));
+const padR = (s, w) => " ".repeat(Math.max(0, w - cells(s))) + s;
+
+const table = [];
+
+// A spanning row: value..when is one run, not three columns.
+table.push({
+  glyph: paint(C.mail, ICON.user),
+  label: "email",
+  span: email ? paint(C.name, email) : paint(C.dim, "signed out"),
+});
+
+table.push({
+  glyph: paint(C.model, ICON.chip),
+  label: "model",
+  span: [
+    bold(C.model, model ?? "—"),
+    effort ? paint(C.effort, boltFor(effort) + " " + effort) : "",
+    wide ? paint(C.badge, "1M") : "",
+  ].filter(Boolean).join("  "),
+});
+
+for (const m of [
+  { icon: ICON.db, hot: ICON.dbHot, label: "ctx", pct: ctxPct, at: null, day: false },
+  { icon: ICON.hour, label: "5h", pct: five?.used_percentage, at: five?.resets_at, day: false },
+  { icon: ICON.cal, label: "week", pct: week?.used_percentage, at: week?.resets_at, day: true },
+  { icon: ICON.cal, label: "fable", pct: fable?.pct ?? null, at: fable?.resetsAt, day: true },
+]) {
+  const p = Number.isFinite(m.pct) ? Math.round(m.pct) : null;
+  const glyph = p !== null && m.hot && p >= 80 ? m.hot : m.icon;
+  const clock = p !== null && m.at ? clockOf(m.at, m.day) : "";
+  table.push({
+    glyph: paint(p === null ? C.label : level(p), glyph),
+    label: m.label,
+    value: p === null ? paint(C.dim, "—") : bar(p),
+    amount: p === null ? "" : bold(level(p), p + "%"),
+    when: clock ? paint(C.dim, ICON.clock + " " + clock) : "",
+  });
+}
+
+// Column widths come from the rows that actually have columns; a spanning row
+// must not stretch them.
+// ── grid ───────────────────────────────────────────────────────────────────
+const GUT = "  "; // one gutter between every pair of columns
+// STATUS_ALIGN=left  — every column starts at the same place, nothing pushed right
+// STATUS_ALIGN=grid  — same columns, but the numbers right-align so digits stack
+const RIGHT = (process.env.STATUS_ALIGN ?? "left").toLowerCase() === "grid";
+const put = (s, w) => (RIGHT ? padR(s, w) : padL(s, w));
+
+// Lay a set of rows out as its own grid: column widths come from just these
+// rows, so two side-by-side blocks never stretch each other. Spanning rows
+// (email, model) run across value..when and are kept out of the width maths.
+function grid(part) {
+  const boxed = part.filter((r) => r.span === undefined);
+  const W = {
+    glyph: Math.max(...part.map((r) => cells(r.glyph))),
+    label: Math.max(...part.map((r) => cells(r.label))),
+    value: boxed.length ? Math.max(...boxed.map((r) => cells(r.value))) : 0,
+    amount: boxed.length ? Math.max(...boxed.map((r) => cells(r.amount))) : 0,
+    when: boxed.length ? Math.max(...boxed.map((r) => cells(r.when))) : 0,
+  };
+  const line = (r) => {
+    const head = padL(r.glyph, W.glyph) + GUT + padL(paint(C.label, r.label), W.label);
+    if (r.span !== undefined) return head + GUT + r.span;
+    return (
+      head + GUT + padL(r.value, W.value) +
+      GUT + put(r.amount, W.amount) +
+      GUT + padL(r.when, W.when)
+    );
+  };
+  const lines = part.map(line);
+  const w = Math.max(...lines.map(cells));
+  return { lines: lines.map((l) => padL(l, w)), width: w };
+}
+
+// ── frame ──────────────────────────────────────────────────────────────────
+//   STATUS_LAYOUT = 2col (default) | 1col
+//   STATUS_BORDER = on (default) | off
+//   STATUS_SEP    = rule (default) | blank | none
+//
+// Claude Code post-processes our output with
+//   stdout.trim().split("\n").flatMap((l) => l.trim() || []).join("\n")
+// so it DELETES every whitespace-only line. U+2800 BRAILLE PATTERN BLANK
+// draws as empty but is not whitespace, so a blank spacer survives it.
+const BLANK = "⠀";
+const TWO = (process.env.STATUS_LAYOUT ?? "2col").toLowerCase() !== "1col";
+const SEP = (process.env.STATUS_SEP ?? "rule").toLowerCase();
+const BORDER = (process.env.STATUS_BORDER ?? "on").toLowerCase() !== "off";
+const PAD = 2;
+const rule = (n) => "─".repeat(n);
+const wall = paint(C.rule, "│");
+const air = " ".repeat(PAD);
+
+// Two columns: who-and-context on the left, the three limits on the right.
+const parts = TWO ? [grid(table.slice(0, 3)), grid(table.slice(3))] : [grid(table)];
+const height = parts[0].lines.length;
+const spans = parts.map((p) => p.width + PAD * 2);
+
+const body = Array.from({ length: height }, (_, i) =>
+  parts.map((p) => p.lines[i]).join(air + (BORDER ? wall : paint(C.rule, "│")) + air)
+);
+
+const join = (l, mid, r) => paint(C.rule, l + spans.map(rule).join(mid) + r);
+const out = [];
+
+if (BORDER) {
+  out.push(join("╭", "┬", "╮"));
+  body.forEach((r, i) => {
+    if (i && SEP !== "none") {
+      out.push(SEP === "blank"
+        ? wall + air + spans.map((n) => padL(BLANK, n - PAD * 2)).join(air + wall + air) + air + wall
+        : join("├", "┼", "┤"));
     }
-    return out;
-  }
+    out.push(wall + air + r + air + wall);
+  });
+  out.push(join("╰", "┴", "╯"));
+} else {
+  const flat = Math.max(...body.map(cells));
+  body.forEach((r, i) => {
+    if (i && SEP !== "none") out.push(SEP === "blank" ? BLANK : paint(C.rule, rule(flat)));
+    out.push(r);
+  });
+}
 
-  // order-preserving split of the groups into n rows, minimizing the widest row
-  function bestSplit(gs, n) {
-    if (n === 1 || gs.length <= n) return { parts: [gs], max: rowWidth(gs) };
-    let best = null;
-    const cuts = (start, left) => {
-      // enumerate cut positions recursively (tiny n, tiny group count)
-      const walk = (i, acc) => {
-        if (acc.length === left) {
-          const points = [0, ...acc, gs.length];
-          const parts = [];
-          for (let p = 0; p < points.length - 1; p++) parts.push(gs.slice(points[p], points[p + 1]));
-          const m = Math.max(...parts.map(rowWidth));
-          if (!best || m < best.max) best = { parts, max: m };
-          return;
-        }
-        for (let c = i; c < gs.length; c++) walk(c + 1, [...acc, c]);
-      };
-      walk(start, []);
-    };
-    cuts(1, n - 1);
-    return best;
-  }
+process.stdout.write(out.join("\n"));
 
-  // rows with "DIV" (rendered as ├───┤) between each content row
-  function layout(n) {
-    const { parts, max } = bestSplit(all, n);
-    const target = Math.max(max, vis(title));
-    const rows = [];
-    parts.forEach((p, i) => {
-      if (i) rows.push("DIV");
-      rows.push(joinJustify(p, target));
+// ── plumbing ───────────────────────────────────────────────────────────────
+function readStdin() {
+  return new Promise((resolve) => {
+    let buf = "";
+    if (process.stdin.isTTY) return resolve(null);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (buf += c));
+    process.stdin.on("end", () => { try { resolve(JSON.parse(buf)); } catch { resolve(null); } });
+    process.stdin.on("error", () => resolve(null));
+  });
+}
+
+// Never block the bar on the network: fire a detached refresh and draw the
+// cache we already have.
+function kickRefresh() {
+  try {
+    spawn(process.execPath, [SELF, "--refresh"], { detached: true, stdio: "ignore" }).unref();
+  } catch {}
+}
+
+async function refreshLimits() {
+  const stamp = () => { try { fs.writeFileSync(LIMITS_CACHE, JSON.stringify({ ...(readLimitsCache() ?? {}), fetchedAt: Date.now() })); } catch {} };
+  const token = oauthToken();
+  if (!token) return stamp();
+  try {
+    const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(8000),
     });
-    return { rows, width: target + 4 };
-  }
-
-  // three cases: one row → two rows → three rows, first that fits (last wins)
-  let rows;
-  const one = layout(1);
-  if (Math.max(one.width, vis(title) + 4) <= cols - 1 || all.length < 2) {
-    rows = one.rows;
-  } else {
-    const two = layout(2);
-    rows = two.width <= cols - 1 ? two.rows : layout(3).rows;
-  }
-
-  const iw = Math.max(...rows.map((r) => vis(r) + 2), vis(title) + 2);
-  const top = `${C.border}╭${RS}${title}${C.border}${"─".repeat(iw - vis(title))}╮${RS}`;
-  const mids = rows.map((r) =>
-    r === "DIV"
-      ? `${C.border}├${"─".repeat(iw)}┤${RS}`
-      : `${C.border}│${RS} ${r}${" ".repeat(iw - 2 - vis(r))} ${C.border}│${RS}`,
-  );
-  const bottom = `${C.border}╰${"─".repeat(iw)}╯${RS}`;
-
-  // Trailing U+2800 spacer survives the status-line trimmer (blank gap above input).
-  process.stdout.write(`${top}\n${mids.join("\n")}\n${bottom}\n⠀`);
+    if (!r.ok) return stamp();
+    const raw = await r.json();
+    fs.writeFileSync(LIMITS_CACHE, JSON.stringify({ fetchedAt: Date.now(), raw }, null, 2));
+  } catch { stamp(); }
 }
 
-main();
+// The live token lives in the login keychain; the file copy goes stale.
+function oauthToken() {
+  const tries = [];
+  try {
+    tries.push(JSON.parse(execFileSync("security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })));
+  } catch {}
+  try { tries.push(JSON.parse(fs.readFileSync(`${HOME}/.claude/.credentials.json`, "utf8"))); } catch {}
+  for (const j of tries) {
+    const o = j?.claudeAiOauth;
+    if (o?.accessToken && Date.now() < (o.expiresAt ?? 0)) return o.accessToken;
+  }
+  return null;
+}

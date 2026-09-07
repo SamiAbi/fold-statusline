@@ -1,7 +1,7 @@
 {
   "name": "fold-statusline",
-  "version": "0.1.0",
-  "description": "The Fold deck line — a boxed, icon-rich status line for Claude Code that folds to fit your terminal",
+  "version": "0.2.0",
+  "description": "The Fold status line — a framed six-fact table for Claude Code: account, model, context, and the 5-hour, weekly and per-model limits",
   "type": "module",
   "bin": {
     "fold-statusline": "bin/cli.mjs"

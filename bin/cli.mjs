@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// fold-statusline CLI — install/uninstall the Fold deck line for Claude Code.
+// fold-statusline CLI — install/uninstall the Fold status line for Claude Code.
 //   fold-statusline install     copy the status line to ~/.claude and enable it
 //                               (installs Maple Mono NF when no Nerd Font is found)
 //   fold-statusline font        install the font + show how to enable it in your terminal
 //
-// Icons: inside Fold the statusline uses Fold Icons, which ships INSIDE the
-// Fold app (color bitmap glyphs; nothing to install here). Everywhere else it
-// uses Nerd Font glyphs, which is what the Maple Mono NF install is for.
+// Icons: inside Fold the status line uses Fold Icons, which ships INSIDE the
+// Fold app (nothing to install here). Everywhere else it uses Nerd Font
+// glyphs, which is what the Maple Mono NF install is for.
 //   fold-statusline uninstall   disable it and restore whatever was there before
 //   fold-statusline status      show whether it is installed and enabled
 
@@ -139,7 +139,7 @@ function install() {
     warn(`no Nerd Font detected — icons would show as boxes. Installing one:`);
     if (installFont()) fontEnableHint();
   }
-  info(`done — the deck line appears in Claude Code within ~30s (or next message).`);
+  info(`done — the status line appears in Claude Code within ~30s (or next message).`);
 }
 
 function uninstall() {
@@ -185,6 +185,6 @@ else if (cmd === "uninstall") uninstall();
 else if (cmd === "status") status();
 else if (cmd === "font") { installFont(); fontEnableHint(); }
 else {
-  console.log(`fold-statusline — the Fold deck line for Claude Code
+  console.log(`fold-statusline — the Fold status line for Claude Code
 usage: fold-statusline [install|font|uninstall|status]   (default: install)`);
 }
